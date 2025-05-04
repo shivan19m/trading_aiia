@@ -1,0 +1,8 @@
+openai
+yfinance
+python-dotenv
+pandas
+tqdm
+chromadb
+matplotlib
+seaborn 
