@@ -19,11 +19,11 @@ def load_market_data(symbol: str, start_date: str, end_date: str, lookback_days:
     """
     Load historical price data for the given stock symbol using Polygon.io.
     Downloads data from (start_date - lookback_days) to end_date.
-    Returns a DataFrame indexed by datetime.
+    Returns a DataFrame indexed by datetime, with OHLCV, VWAP, trade count, dividends, splits, pre/post-market prices.
     """
     cache_dir = 'data/cache'
     os.makedirs(cache_dir, exist_ok=True)
-    cache_file = os.path.join(cache_dir, f'{symbol}_{start_date}_{end_date}_{interval}.csv')
+    cache_file = os.path.join(cache_dir, f'{symbol}_{start_date}_{end_date}_{interval}_vwap.csv')
     if not force_refresh and os.path.exists(cache_file):
         print(f"Loading cached OHLCV data for {symbol} from {cache_file}")
         df = pd.read_csv(cache_file, index_col=0, parse_dates=True)
@@ -68,7 +68,6 @@ def load_market_data(symbol: str, start_date: str, end_date: str, lookback_days:
 
     # Build DataFrame
     df = pd.DataFrame(results)
-    # Polygon returns timestamps in ms since epoch
     df['timestamp'] = pd.to_datetime(df['t'], unit='ms')
     df.set_index('timestamp', inplace=True)
     df = df.rename(columns={
@@ -80,8 +79,66 @@ def load_market_data(symbol: str, start_date: str, end_date: str, lookback_days:
         'n': 'transactions'
     })
     df = df[['open', 'high', 'low', 'close', 'volume']]
+
+    # --- ENHANCEMENT: Fetch VWAP, trade count, pre/post-market, dividends, splits ---
+    vwap_list = []
+    trades_list = []
+    pre_market_list = []
+    after_market_list = []
+    dividend_list = []
+    split_list = []
+    for date in df.index.date:
+        # Open/close endpoint for VWAP, pre/post-market
+        openclose_url = f"https://api.polygon.io/v1/open-close/{symbol.upper()}/{date}?adjusted=true&apiKey={POLYGON_API_KEY}"
+        resp2 = requests.get(openclose_url)
+        if resp2.status_code == 200:
+            oc_data = resp2.json()
+            vwap = oc_data.get('vwap', None)
+            trades = oc_data.get('volume', None)
+            pre_market = oc_data.get('preMarket', None)
+            after_market = oc_data.get('afterHours', None)
+        else:
+            vwap = None
+            trades = None
+            pre_market = None
+            after_market = None
+        vwap_list.append(vwap)
+        trades_list.append(trades)
+        pre_market_list.append(pre_market)
+        after_market_list.append(after_market)
+        # Dividends endpoint
+        dividend_url = f"https://api.polygon.io/v3/reference/dividends?ticker={symbol.upper()}&ex_dividend_date={date}&apiKey={POLYGON_API_KEY}"
+        resp3 = requests.get(dividend_url)
+        if resp3.status_code == 200:
+            div_data = resp3.json()
+            if 'results' in div_data and div_data['results']:
+                dividend = div_data['results'][0].get('cash_amount', None)
+            else:
+                dividend = None
+        else:
+            dividend = None
+        dividend_list.append(dividend)
+        # Splits endpoint
+        split_url = f"https://api.polygon.io/v3/reference/splits?ticker={symbol.upper()}&execution_date={date}&apiKey={POLYGON_API_KEY}"
+        resp4 = requests.get(split_url)
+        if resp4.status_code == 200:
+            split_data = resp4.json()
+            if 'results' in split_data and split_data['results']:
+                split = split_data['results'][0].get('split_from', None)
+            else:
+                split = None
+        else:
+            split = None
+        split_list.append(split)
+    df['vwap'] = vwap_list
+    df['trades'] = trades_list
+    df['pre_market'] = pre_market_list
+    df['after_market'] = after_market_list
+    df['dividend'] = dividend_list
+    df['split'] = split_list
+
     df.to_csv(cache_file)
-    print(f"Cached OHLCV data for {symbol} to {cache_file}")
+    print(f"Cached OHLCV+VWAP+dividends+splits data for {symbol} to {cache_file}")
     return df
 
 # def load_market_data(symbol: str, force_refresh: bool = False) -> dict:

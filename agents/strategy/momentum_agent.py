@@ -21,15 +21,6 @@ class MomentumAgent(BaseAgent):
         super().__init__()  # Initialize base class
         self.client = openai.OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
         self.tickers = []
-        self.mock_plan = {
-            "AAPL": {"weight": 0.2, "reason": "Strong momentum indicators"},
-            "MSFT": {"weight": 0.2, "reason": "Positive trend"},
-            "GOOG": {"weight": 0.2, "reason": "Volume increasing"},
-            "AMZN": {"weight": 0.2, "reason": "RSI showing strength"},
-            "TSLA": {"weight": 0.1, "reason": "Volatile but trending up"},
-            "cash": {"weight": 0.1, "reason": "Holding cash for opportunities"}
-        }
-        # Model used: gpt-4
 
     def set_tickers(self, tickers: list):
         """Set the list of tickers to consider."""
@@ -40,8 +31,8 @@ class MomentumAgent(BaseAgent):
         Generate a portfolio allocation plan based on momentum indicators.
         """
         if not self.tickers:
-            logger.warning("No tickers set, using mock plan")
-            return self.mock_plan
+            logger.error("No tickers set for MomentumAgent. Cannot generate plan.")
+            raise ValueError("No tickers set for MomentumAgent.")
 
         try:
             # Prepare features for each ticker
@@ -84,7 +75,7 @@ class MomentumAgent(BaseAgent):
             plan_match = re.search(r'\{(?:[^{}]*|\{[^{}]*\})*\}\s*$', gpt_response)
             if not plan_match:
                 logger.error("Failed to find JSON in GPT response")
-                return self.mock_plan
+                return {}
 
             plan_str = plan_match.group(0)
             logger.debug(f"Extracted plan JSON: {plan_str[:100]}...")
@@ -95,13 +86,13 @@ class MomentumAgent(BaseAgent):
             # Validate plan structure
             if not self._validate_plan(plan):
                 logger.error("Plan validation failed")
-                return self.mock_plan
+                return {}
 
             return plan
 
         except Exception as e:
             logger.error(f"Error in propose_plan: {str(e)}")
-            return self.mock_plan
+            return {}
 
     def _validate_plan(self, plan: Dict[str, Dict[str, Any]]) -> bool:
         """Validate the structure of the generated plan."""
@@ -147,27 +138,59 @@ class MomentumAgent(BaseAgent):
     def justify_plan(self, plan, context):
         """
         Provide justification for the proposed plan.
-        TODO: Integrate LLM-based justification.
         """
-        pass
+        if not plan:
+            return "No plan to justify."
+        lines = []
+        for symbol, alloc in plan.items():
+            reason = alloc.get('reason', 'No reason provided')
+            weight = alloc.get('weight', 0)
+            lines.append(f"{symbol}: weight {weight:.2f}, reason: {reason}")
+        return "; ".join(lines)
 
     def critique_plan(self, plan, context):
         """
-        Critique another agent's plan.
-        TODO: Implement Socratic reasoning and critique logic.
+        Critique another agent's plan from a momentum perspective.
         """
-        pass
+        if not plan:
+            return "No plan to critique."
+        critiques = []
+        for symbol, alloc in plan.items():
+            weight = alloc.get('weight', 0)
+            reason = alloc.get('reason', '')
+            if weight > 0.5:
+                critiques.append(f"{symbol}: High allocation ({weight:.2f})—momentum strategies typically diversify more unless a very strong trend is present.")
+            if 'momentum' not in reason.lower():
+                critiques.append(f"{symbol}: Reason does not mention momentum—consider trend strength.")
+        if not critiques:
+            return "Plan aligns with momentum principles."
+        return "; ".join(critiques)
 
     def validate_constraints(self, plan, constraints):
         """
         Validate the plan against explicit, implicit, and derived constraints.
-        TODO: Implement constraint validation logic.
+        Returns (is_valid, violations)
         """
-        pass
+        violations = []
+        if not plan:
+            violations.append("Plan is empty.")
+            return False, violations
+        total_weight = sum(alloc.get('weight', 0) for alloc in plan.values())
+        if abs(total_weight - 1.0) > 0.01:
+            violations.append(f"Total weight {total_weight:.2f} does not sum to 1.0.")
+        for symbol, alloc in plan.items():
+            if alloc.get('weight', 0) < 0:
+                violations.append(f"{symbol}: Negative weight.")
+            if alloc.get('weight', 0) > 1:
+                violations.append(f"{symbol}: Weight exceeds 1.")
+        is_valid = len(violations) == 0
+        return is_valid, violations
 
     def execute(self, plan):
         """
-        Execute the plan (or simulate execution).
-        TODO: Integrate with ExecutorAgent and real execution logic.
+        Simulate execution of the plan (mock logic).
         """
-        pass 
+        if not plan:
+            return {'status': 'failed', 'reason': 'No plan to execute.'}
+        # Simulate success
+        return {'status': 'success', 'plan': plan} 

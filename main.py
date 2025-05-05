@@ -7,6 +7,7 @@ from agents.meta_planner import MetaPlannerAgent
 from execution.executor import ExecutorAgent
 from memory.memory_agent import MemoryAgent
 from evaluation.analyzer import PostTradeAnalyzerAgent
+from data.feature_engineering import compute_features
 import os 
 from dotenv import load_dotenv
 load_dotenv()
@@ -19,6 +20,10 @@ end_date = "2024-01-31"
 market_data = load_market_data('AAPL', start_date, end_date, lookback_days=30, interval='1d')
 context = {}  # Mock context, can be extended
 
+# Compute features for AAPL
+features = {'AAPL': compute_features(market_data, symbol='AAPL')}
+print("Features for AAPL:", features['AAPL'])  # Debug print
+
 # Instantiate agents
 momentum_agent = MomentumAgent()
 mean_reversion_agent = MeanReversionAgent()
@@ -29,12 +34,17 @@ executor_agent = ExecutorAgent()
 memory_agent = MemoryAgent()
 post_trade_analyzer = PostTradeAnalyzerAgent()
 
+# Set tickers for all agents
+momentum_agent.set_tickers(['AAPL'])
+mean_reversion_agent.set_tickers(['AAPL'])
+event_driven_agent.set_tickers(['AAPL'])
+
 # Each agent proposes and justifies a plan
 agents = [momentum_agent, mean_reversion_agent, event_driven_agent]
 plans = []
 print("\n--- Plan Proposals and Justifications ---")
 for agent in agents:
-    plan = agent.propose_plan(market_data, context)
+    plan = agent.propose_plan(features, context)
     justification = agent.justify_plan(plan, context)
     plans.append({'agent': agent.__class__.__name__, 'plan': plan, 'justification': justification, 'critiques': []})
     print(f"\n{agent.__class__.__name__} Plan: {plan}")

@@ -7,7 +7,7 @@ from datetime import datetime
 def compute_features(df, symbol: str = None, force_refresh: bool = False) -> dict:
     """
     Compute features for a given ticker DataFrame.
-    Returns a dict with RSI, MACD, z-score, Bollinger Bands, avg volume ratio.
+    Returns a dict with RSI, MACD, z-score, Bollinger Bands, avg volume ratio, typical price, dollar volume, prev day's data, dividends, splits, pre/post-market prices if available.
     """
     if symbol is not None:
         # Create cache directory if it doesn't exist
@@ -22,8 +22,24 @@ def compute_features(df, symbol: str = None, force_refresh: bool = False) -> dic
                 return json.load(f)
     
     features = {}
-    close = df['Close']
-    volume = df['Volume']
+    # Use lower-case column names for compatibility
+    df = df.copy()
+    df.columns = [c.lower() for c in df.columns]
+    close = df['close']
+    volume = df['volume']
+    high = df['high']
+    low = df['low']
+    open_ = df['open']
+    # Typical price
+    typical_price = (high + low + close) / 3
+    features['typical_price'] = float(typical_price.iloc[-1]) if not typical_price.empty else np.nan
+    # Dollar volume
+    dollar_volume = close * volume
+    features['dollar_volume'] = float(dollar_volume.iloc[-1]) if not dollar_volume.empty else np.nan
+    # Previous day's close, high, low
+    features['prev_close'] = float(close.shift(1).iloc[-1]) if len(close) > 1 else np.nan
+    features['prev_high'] = float(high.shift(1).iloc[-1]) if len(high) > 1 else np.nan
+    features['prev_low'] = float(low.shift(1).iloc[-1]) if len(low) > 1 else np.nan
     # RSI
     delta = close.diff()
     up = delta.clip(lower=0)
@@ -51,28 +67,35 @@ def compute_features(df, symbol: str = None, force_refresh: bool = False) -> dic
     features['bb_lower'] = float((ma20 - 2 * std20).iloc[-1]) if not ma20.empty else np.nan
     features['bb_ma'] = float(ma20.iloc[-1]) if not ma20.empty else np.nan
     # Avg volume ratio
-    # Avg volume ratio
-    # Avg volume ratio
     avg_vol_5 = volume.rolling(5).mean().iloc[-1] if len(volume) >= 5 else np.nan
     avg_vol_30 = volume.rolling(30).mean().iloc[-1] if len(volume) >= 30 else np.nan
-
-    # Ensure scalar before checking np.isnan
     try:
         avg_vol_5_val = float(avg_vol_5)
         avg_vol_30_val = float(avg_vol_30)
     except (ValueError, TypeError):
         avg_vol_5_val = avg_vol_30_val = np.nan
-
     if not np.isnan(avg_vol_5_val) and not np.isnan(avg_vol_30_val):
         features['avg_vol_ratio'] = avg_vol_5_val / (avg_vol_30_val + 1e-9)
     else:
         features['avg_vol_ratio'] = np.nan
-    # features['avg_vol_ratio'] = float(avg_vol_5 / (avg_vol_30 + 1e-9)) if avg_vol_30 and not np.isnan(avg_vol_5) else np.nan
-    
+    # VWAP and trades (from enhanced loader)
+    if 'vwap' in df.columns:
+        features['vwap'] = float(df['vwap'].iloc[-1]) if not df['vwap'].empty else np.nan
+    if 'trades' in df.columns:
+        features['trades'] = float(df['trades'].iloc[-1]) if not df['trades'].empty else np.nan
+    # Pre/post-market prices (from open-close endpoint, if merged in loader)
+    if 'pre_market' in df.columns:
+        features['pre_market'] = float(df['pre_market'].iloc[-1]) if not df['pre_market'].empty else np.nan
+    if 'after_market' in df.columns:
+        features['after_market'] = float(df['after_market'].iloc[-1]) if not df['after_market'].empty else np.nan
+    # Dividends and splits (if merged in loader)
+    if 'dividend' in df.columns:
+        features['dividend'] = float(df['dividend'].iloc[-1]) if not df['dividend'].empty else np.nan
+    if 'split' in df.columns:
+        features['split'] = float(df['split'].iloc[-1]) if not df['split'].empty else np.nan
     # Cache features if symbol provided
     if symbol is not None:
         with open(cache_file, 'w') as f:
             json.dump(features, f)
         print(f"Cached features for {symbol} to {cache_file}")
-    
     return features 
