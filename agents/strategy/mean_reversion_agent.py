@@ -24,8 +24,18 @@ class MeanReversionAgent(BaseAgent):
         """
         openai.api_key = os.getenv('OPENAI_API_KEY')
         # 1. Construct context_str from key indicators
+        # context_str = "; ".join([
+        #     f"{symbol} z-score {vals.get('zscore', 'nan'):.2f}, BB {vals.get('bb_ma', 'nan'):.2f}, RSI {vals.get('rsi', 'nan'):.2f}"
+        #     for symbol, vals in features.items()
+        # ])
         context_str = "; ".join([
-            f"{symbol} z-score {vals.get('zscore', 'nan'):.2f}, BB {vals.get('bb_ma', 'nan'):.2f}, RSI {vals.get('rsi', 'nan'):.2f}"
+            (
+                f"{symbol} z-score {vals.get('zscore', float('nan')):.2f}, "
+                f"BB {vals.get('bb_ma', float('nan')):.2f}, "
+                f"RSI {vals.get('rsi', float('nan')):.2f}"
+                if isinstance(vals, dict)
+                else f"{symbol} has invalid feature data: {vals}"
+            )
             for symbol, vals in features.items()
         ])
         # 2. Retrieve similar plans
@@ -71,27 +81,63 @@ class MeanReversionAgent(BaseAgent):
             memory_agent.store_plan_vector(plan, context_str)
         return plan
 
+    # def justify_plan(self, plan, context):
+    #     """
+    #     Use GPT-4 to justify the mean-reversion-based plan.
+    #     """
+    #     prompt = (
+    #         f"Justify the following mean-reversion trade plan using z-scores, Bollinger Bands, or mean-reversion models: {plan}. "
+    #         "Return a concise explanation."
+    #     )
+    #     try:
+    #         response = openai.chat.completions.create(
+    #             model="gpt-4",
+    #             messages=[{"role": "system", "content": "You are a financial trading assistant."},
+    #                       {"role": "user", "content": prompt}],
+    #             temperature=0.3,
+    #             max_tokens=200
+    #         )
+    #         justification = response.choices[0].message.content
+    #         return justification
+    #     except Exception as e:
+    #         print(f"[OpenAI API Error] {e}")
+    #         return f"Plan justified by deviation from historical mean (z-score/Bollinger Band). Action: {plan['action']} {plan['quantity']} shares of {plan['symbol']}."
+    
     def justify_plan(self, plan, context):
         """
-        Use GPT-4 to justify the mean-reversion-based plan.
+        Use GPT-4 to justify the mean-reversion-based multi-asset plan.
         """
+        openai.api_key = os.getenv('OPENAI_API_KEY')
+
+        plan_summary = "\n".join([
+            f"{symbol}: weight {vals.get('weight', 0):.2f}, reason: {vals.get('reason', 'N/A')}"
+            for symbol, vals in plan.items()
+        ])
+
         prompt = (
-            f"Justify the following mean-reversion trade plan using z-scores, Bollinger Bands, or mean-reversion models: {plan}. "
-            "Return a concise explanation."
+            "You are a financial trading assistant. Given the following mean-reversion-based portfolio allocation plan:\n"
+            f"{plan_summary}\n"
+            "Explain the rationale behind this plan based on z-scores, Bollinger Bands, RSI, and general mean-reversion principles. "
+            "Be concise and focus on the logic behind overweighting or underweighting each asset."
         )
+
         try:
             response = openai.chat.completions.create(
-                model="gpt-4",
+                model="gpt-4-turbo",  # Replace with "gpt-3.5-turbo" if you lack GPT-4 access
                 messages=[{"role": "system", "content": "You are a financial trading assistant."},
-                          {"role": "user", "content": prompt}],
+                        {"role": "user", "content": prompt}],
                 temperature=0.3,
-                max_tokens=200
+                max_tokens=300
             )
-            justification = response.choices[0].message.content
-            return justification
+            return response.choices[0].message.content.strip()
         except Exception as e:
             print(f"[OpenAI API Error] {e}")
-            return f"Plan justified by deviation from historical mean (z-score/Bollinger Band). Action: {plan['action']} {plan['quantity']} shares of {plan['symbol']}."
+            # Fallback explanation
+            fallback_lines = [
+                f"{symbol}: Allocate {vals.get('weight', 0):.2f} based on mean-reversion signal (e.g., z-score, BB, RSI)."
+                for symbol, vals in plan.items()
+            ]
+            return "Fallback justification:\n" + "\n".join(fallback_lines)
 
     def critique_plan(self, plan, context):
         """
@@ -105,7 +151,7 @@ class MeanReversionAgent(BaseAgent):
         )
         try:
             response = openai.chat.completions.create(
-                model="gpt-4",
+                model="gpt-4o-mini",
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}

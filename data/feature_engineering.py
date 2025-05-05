@@ -51,9 +51,23 @@ def compute_features(df, symbol: str = None, force_refresh: bool = False) -> dic
     features['bb_lower'] = float((ma20 - 2 * std20).iloc[-1]) if not ma20.empty else np.nan
     features['bb_ma'] = float(ma20.iloc[-1]) if not ma20.empty else np.nan
     # Avg volume ratio
+    # Avg volume ratio
+    # Avg volume ratio
     avg_vol_5 = volume.rolling(5).mean().iloc[-1] if len(volume) >= 5 else np.nan
     avg_vol_30 = volume.rolling(30).mean().iloc[-1] if len(volume) >= 30 else np.nan
-    features['avg_vol_ratio'] = float(avg_vol_5 / (avg_vol_30 + 1e-9)) if avg_vol_30 and not np.isnan(avg_vol_5) else np.nan
+
+    # Ensure scalar before checking np.isnan
+    try:
+        avg_vol_5_val = float(avg_vol_5)
+        avg_vol_30_val = float(avg_vol_30)
+    except (ValueError, TypeError):
+        avg_vol_5_val = avg_vol_30_val = np.nan
+
+    if not np.isnan(avg_vol_5_val) and not np.isnan(avg_vol_30_val):
+        features['avg_vol_ratio'] = avg_vol_5_val / (avg_vol_30_val + 1e-9)
+    else:
+        features['avg_vol_ratio'] = np.nan
+    # features['avg_vol_ratio'] = float(avg_vol_5 / (avg_vol_30 + 1e-9)) if avg_vol_30 and not np.isnan(avg_vol_5) else np.nan
     
     # Cache features if symbol provided
     if symbol is not None:

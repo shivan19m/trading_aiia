@@ -72,8 +72,20 @@ def simulate_with_ensemble_memory(start_date, end_date, initial_cash, tickers, a
                     continue
                 if symbol in price_data:
                     alloc_cash = cash_balance * alloc['weight']
-                    price = price_data[symbol]['Close'].iloc[-1]
+                    # Ensure price is a scalar float
+                    # 安全提取价格（假设 price_data 是 dict of DataFrame）
+                    if symbol not in price_data or 'Close' not in price_data[symbol]:
+                        print(f"[WARN] No price data for {symbol}, skipping...")
+                        continue
+
+                    price_series = price_data[symbol]['Close']
+                    if price_series.empty:
+                        print(f"[WARN] Empty price series for {symbol}, skipping...")
+                        continue
+
+                    price = float(price_series.iloc[-1])  # ✅ 保证是标量
                     shares = int(alloc_cash // price)
+                    
                     holdings[symbol] += shares
                     cash_balance -= shares * price
         prev_allocations = allocations
