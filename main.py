@@ -7,12 +7,16 @@ from agents.meta_planner import MetaPlannerAgent
 from execution.executor import ExecutorAgent
 from memory.memory_agent import MemoryAgent
 from evaluation.analyzer import PostTradeAnalyzerAgent
-
+import os 
 from dotenv import load_dotenv
 load_dotenv()
 
-# Load market data (AAPL, 7-day hourly)
-market_data = load_market_data('AAPL')
+# Set date range for market data
+start_date = "2024-01-01"
+end_date = "2024-01-31"
+
+# Load market data (AAPL, daily)
+market_data = load_market_data('AAPL', start_date, end_date, lookback_days=30, interval='1d')
 context = {}  # Mock context, can be extended
 
 # Instantiate agents

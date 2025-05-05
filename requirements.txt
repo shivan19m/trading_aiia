@@ -5,4 +5,6 @@ pandas
 tqdm
 chromadb
 matplotlib
-seaborn 
+seaborn
+streamlit
+plotly 
