@@ -74,7 +74,8 @@ class ValidatorAgent(BaseAgent):
                     "\n".join(f"- {v}" for v in violations) +
                     "\n\nExplain the financial risk implications and how to revise the plan to satisfy constraints."
                 )
-                response = self.client.chat.completions.create(
+                response = self.call_openai_with_backoff(
+                    client=self.client,
                     model="gpt-4o",
                     messages=[
                         {"role": "system", "content": "You are a financial risk management assistant."},
@@ -83,6 +84,15 @@ class ValidatorAgent(BaseAgent):
                     temperature=0.3,
                     max_tokens=300
                 )
+                # response = self.client.chat.completions.create(
+                #     model="gpt-4o-mini",
+                #     messages=[
+                #         {"role": "system", "content": "You are a financial risk management assistant."},
+                #         {"role": "user", "content": prompt}
+                #     ],
+                #     temperature=0.3,
+                #     max_tokens=300
+                # )
                 llm_suggestion = response.choices[0].message.content.strip()
                 violations.append("LLM Suggestion: " + llm_suggestion)
             except Exception as e:
