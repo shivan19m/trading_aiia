@@ -113,6 +113,8 @@ from evaluation.analyzer import PostTradeAnalyzerAgent
 import os
 from dotenv import load_dotenv
 
+import numpy as np
+
 load_dotenv()
 
 # --- Configuration --------------------------------------------------------
@@ -121,17 +123,63 @@ start_date = "2024-01-01"
 end_date   = "2024-01-31"
 tickers    = ['AAPL','MSFT','GOOG','AMZN','TSLA','cash']
 
-# --- Load data ------------------------------------------------------------
+# --- Load raw market data -------------------------------------------------
 
-market_data = load_market_data(
-    'AAPL',
-    start_date,
-    end_date,
-    lookback_days=30,
-    interval='1d'
-)
+# NOTE: This assumes `load_market_data` can load all tickers at once
+market_data_dict = {
+    ticker: load_market_data(ticker, start_date, end_date, lookback_days=30, interval='1d')
+    for ticker in tickers if ticker != 'cash'  # Skip 'cash'
+}
 
-# --- Instantiate agents --------------------------------------------------
+# --- Extract momentum features for all tickers ----------------------------
+
+def compute_ema(series, span):
+    return series.ewm(span=span, adjust=False).mean()
+
+def compute_rsi(series, period=14):
+    delta = series.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    rs = gain / (loss + 1e-9)
+    return 100 - (100 / (1 + rs))
+
+# def extract_momentum_features(price_data_dict):
+#     """
+#     Extracts basic technical indicators: momentum, RSI, MACD
+#     Inputs:
+#         price_data_dict: {symbol: pd.DataFrame} where df has 'close' column
+#     Returns:
+#         {symbol: {feature_name: value, ...}}
+#     """
+#     features = {}
+#     for symbol, df in price_data_dict.items():
+#         try:
+#             if 'close' not in df.columns or df.isnull().values.any() or len(df) < 30:
+#                 raise ValueError("Invalid or insufficient data")
+
+#             df = df.copy()
+#             df['momentum'] = df['close'].pct_change(periods=5)
+#             df['rsi'] = compute_rsi(df['close'])
+#             df['macd'] = compute_ema(df['close'], 12) - compute_ema(df['close'], 26)
+
+#             latest = df.dropna().iloc[-1]
+#             features[symbol] = {
+#                 'momentum': float(latest['momentum']),
+#                 'rsi': float(latest['rsi']),
+#                 'macd': float(latest['macd']),
+#             }
+#         except Exception as e:
+#             print(f"[WARN] Feature extraction failed for {symbol}: {e}")
+#             features[symbol] = {}
+#     return features
+
+# Extracted features used by agents
+
+    
+# feature_dict = extract_momentum_features(market_data_dict)
+# feature_dict['cash'] = {}  # Optional: add empty dict for 'cash' to prevent key errors
+
+# --- Instantiate agents ---------------------------------------------------
 
 momentum_agent       = MomentumAgent()
 mean_reversion_agent = MeanReversionAgent()
@@ -142,7 +190,18 @@ executor_agent       = ExecutorAgent()
 memory_agent         = MemoryAgent()
 post_trade_analyzer  = PostTradeAnalyzerAgent()
 
-# --- Set tickers on all that need it --------------------------------------
+# --- Assign tickers to agents --------------------------------------------
+# Map agent to their feature extractors
+
+agent_feature_map = {
+    momentum_agent: momentum_agent.extract_features(market_data_dict),
+    mean_reversion_agent: mean_reversion_agent.extract_features(market_data_dict),
+    event_driven_agent: event_driven_agent.extract_features(market_data_dict)
+}
+
+# Optional: Add empty features for 'cash'
+for features in agent_feature_map.values():
+    features['cash'] = {}
 
 for ag in [
     momentum_agent,
@@ -154,13 +213,13 @@ for ag in [
     ag.set_tickers(tickers)
 
 # --- 1) Plan Proposals & Justifications -----------------------------------
-
 strategists = [momentum_agent, mean_reversion_agent, event_driven_agent]
 plans = []
 
 print("\n--- Plan Proposals and Justifications ---")
 for ag in strategists:
-    plan = ag.propose_plan(market_data, context={})
+    features = agent_feature_map.get(ag, {})  # get agent's own features
+    plan = ag.propose_plan(features, context={})
     just = ag.justify_plan(plan, context={})
     plans.append({
         'agent': ag.__class__.__name__,
@@ -213,11 +272,11 @@ if not valid_plans:
 else:
     selected = meta_planner.coordinate_planning(
         [p['plan'] for p in valid_plans],
-        market_data
+        market_data_dict  # Optionally pass full data
     )
     print(f"Selected Plan: {selected}")
 
-# --- 6) Execute ------------------------------------------------------------
+# --- 6) Execute -----------------------------------------------------------
 
 print("\n--- Execution ---")
 if selected:
@@ -238,9 +297,9 @@ if selected and result:
         meta_planner.__class__.__name__: analysis['score']
     })
 
-# --- 8) Memory Logs --------------------------------------------------------
+# --- 8) Memory Logs -------------------------------------------------------
 
 print("\n--- Memory Logs ---")
 print("Plan History:        ", memory_agent.get_plan_history())
 print("Performance History: ", memory_agent.get_performance_history())
-print("Constraint Violations:", memory_agent.get_constraint_violations()) 
+print("Constraint Violations:", memory_agent.get_constraint_violations())

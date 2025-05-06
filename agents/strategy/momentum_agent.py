@@ -102,7 +102,25 @@ class MomentumAgent(BaseAgent):
         except Exception as e:
             logger.error(f"Error in propose_plan: {str(e)}")
             return self.mock_plan
-
+        
+    def extract_features(self, market_data_dict):
+        features = {}
+        for symbol, df in market_data_dict.items():
+            try:
+                df = df.copy()
+                df['momentum'] = df['close'].pct_change(periods=5)
+                df['rsi'] = df['close'].rolling(14).apply(self._calc_rsi)
+                df['macd'] = df['close'].ewm(span=12).mean() - df['close'].ewm(span=26).mean()
+                latest = df.dropna().iloc[-1]
+                features[symbol] = {
+                    'momentum': float(latest['momentum']),
+                    'rsi': float(latest['rsi']),
+                    'macd': float(latest['macd']),
+                }
+            except Exception as e:
+                features[symbol] = {}
+        return features
+    
     def _validate_plan(self, plan: Dict[str, Dict[str, Any]]) -> bool:
         """Validate the structure of the generated plan."""
         try:

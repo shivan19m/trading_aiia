@@ -79,7 +79,25 @@ class MeanReversionAgent(BaseAgent):
         if memory_agent:
             memory_agent.store_plan_vector(plan, context_str)
         return plan
-
+    def extract_features(self, market_data_dict):
+        features = {}
+        for symbol, df in market_data_dict.items():
+            try:
+                df = df.copy()
+                df['sma'] = df['close'].rolling(window=20).mean()
+                df['std'] = df['close'].rolling(window=20).std()
+                df['zscore'] = (df['close'] - df['sma']) / df['std']
+                df['rsi'] = df['close'].rolling(14).apply(self._calc_rsi)
+                latest = df.dropna().iloc[-1]
+                features[symbol] = {
+                    'zscore': float(latest['zscore']),
+                    'rsi': float(latest['rsi']),
+                    'bb_upper': float(latest['sma'] + 2 * latest['std']),
+                    'bb_lower': float(latest['sma'] - 2 * latest['std']),
+                }
+            except Exception as e:
+                features[symbol] = {}
+        return features
     # def justify_plan(self, plan, context):
     #     """
     #     Use GPT-4 to justify the mean-reversion-based plan.

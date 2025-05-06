@@ -16,54 +16,66 @@ from openai import OpenAI
 client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
 from .base import BaseAgent
 
+import json
+
 class ValidatorAgent(BaseAgent):
-    """
-    Agent that performs static and dynamic constraint checks, with OpenAI-powered explanations and tuning.
-    """
-    BLACKLISTED_SYMBOLS = {'GME', 'AMC', 'BBBY'}
-    DEFAULT_MAX_WEIGHT = 0.5
-    DEFAULT_MIN_CONFIDENCE = 0.6
-    EPS = 1e-6
+    DEFAULT_MAX_WEIGHT = 1.0
+    DEFAULT_MIN_CONFIDENCE = 0.5
 
     def __init__(self):
         super().__init__()
-        # Use global API key from environment
         self.max_weight = self.DEFAULT_MAX_WEIGHT
         self.min_confidence = self.DEFAULT_MIN_CONFIDENCE
+        self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-    def validate_constraints(self, plan, constraints=None):
-        """
-        Validate plan against static rules and return OpenAI-tuned feedback.
-        """
-        # Ensure plan structure
-        try:
-            plan = self.validate_plan(plan)
-        except ValueError as e:
-            return False, [str(e)]
-
+    def validate_constraints(self, plan, constraints):
         violations = []
-        # Total weight
-        total_weight = sum(item.get('weight', 0) for item in plan.values())
-        if abs(total_weight - 1.0) > self.EPS:
-            violations.append(f"Total weight {total_weight:.2f} ≠ 1.0")
 
-        # Per-asset checks
-        for symbol, meta in plan.items():
-            w = meta.get('weight', 0)
-            if w > self.max_weight:
-                violations.append(f"{symbol}: weight {w:.2f} exceeds max {self.max_weight}")
-            # Confidence fallback (if provided)
-            if 'confidence' in meta and meta['confidence'] < self.min_confidence:
-                violations.append(f"{symbol}: confidence {meta['confidence']:.2f} below {self.min_confidence}")
-            if symbol.upper() in self.BLACKLISTED_SYMBOLS:
-                violations.append(f"{symbol}: blacklisted")
+        # 1. Check each asset weight is valid
+        total_weight = 0.0
+        for symbol, info in plan.items():
+            weight = info.get('weight', 0)
+            reason = info.get('reason', '').strip()
+
+            if not (0.0 <= weight <= 1.0):
+                violations.append(f"{symbol}: weight {weight:.2f} is out of bounds [0, 1].")
+
+            if symbol.lower() == 'cash' and weight > 0.5:
+                violations.append(f"{symbol}: weight {weight:.2f} exceeds max 0.5")
+
+            if reason == "":
+                violations.append(f"{symbol}: missing reason for allocation.")
+
+            total_weight += weight
+
+        # 2. Check total exposure
+        if total_weight > self.max_weight:
+            violations.append(f"Total portfolio weight {total_weight:.2f} exceeds limit of {self.max_weight:.2f}")
+
+        # 3. Try using LLM for extra suggestions
+        llm_suggestion = ""
+        if violations:
+            try:
+                prompt = (
+                    "A portfolio plan has the following issues:\n"
+                    + "\n".join(f"- {v}" for v in violations)
+                    + "\n\nExplain why these are problematic in financial terms and suggest specific adjustments to meet constraints."
+                )
+                response = self.client.chat.completions.create(
+                    model="gpt-4o",
+                    messages=[
+                        {"role": "system", "content": "You are a financial risk management assistant."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    temperature=0.2,
+                    max_tokens=300
+                )
+                llm_suggestion = response.choices[0].message.content.strip()
+            except Exception as e:
+                llm_suggestion = f"LLM Suggestion: Could not get LLM explanation: {e}"
+            violations.append(llm_suggestion)
 
         is_valid = len(violations) == 0
-        # If violations, get LLM explanation and tuning suggestions
-        if violations:
-            explanation = self._explain_and_tune(plan, violations)
-            violations.append(f"LLM Suggestion: {explanation}")
-
         return is_valid, violations
 
     def _explain_and_tune(self, plan, violations):

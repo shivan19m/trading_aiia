@@ -72,6 +72,44 @@ class EventDrivenAgent(BaseAgent):
     #     if memory_agent:
     #         memory_agent.store_plan_vector(plan, context_str)
     #     return plan
+    
+    def extract_features(self, market_data_dict):
+        """
+        Simulated event-based features. You can later replace this with real APIs (e.g., news sentiment or earnings data).
+        Output format:
+        {
+            'AAPL': {
+                'news_sentiment': 0.6,  # -1 to +1
+                'earnings_surprise': 0.1,  # % beat/miss
+                'macro_score': 0.2  # Impact from macro events
+            },
+            ...
+        }
+        """
+        features = {}
+        for symbol in market_data_dict:
+            features[symbol] = {
+                "news_sentiment": random.uniform(-1, 1),
+                "earnings_surprise": random.uniform(-0.2, 0.2),
+                "macro_score": random.choice([0.0, 0.1, -0.1])
+            }
+        return features
+    
+    #For real implementation
+    
+    # def extract_features(self, market_data_dict):
+    #     features = {}
+    #     for symbol in market_data_dict:
+    #         news_sentiment = self.fetch_news_sentiment(symbol)
+    #         earnings_surprise = self.fetch_earnings_data(symbol)
+    #         macro_score = self.get_macro_signal()
+
+    #         features[symbol] = {
+    #             "news_sentiment": news_sentiment,
+    #             "earnings_surprise": earnings_surprise,
+    #             "macro_score": macro_score
+    #         }
+    #     return features
 
     def propose_plan(self, features, context, memory_agent=None):
         """
