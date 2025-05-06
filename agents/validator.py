@@ -11,55 +11,68 @@
 #     MAX_WEIGHT = 0.5
 #     MAX_TOTAL_WEIGHT = 1.0
 import os
-from openai import OpenAI
-
-client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
-from .base import BaseAgent
-
 import json
+import logging
+from typing import Dict, Any
+from openai import OpenAI
+from .base import BaseAgent
+from sklearn.ensemble import RandomForestClassifier
+import numpy as np
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 class ValidatorAgent(BaseAgent):
     DEFAULT_MAX_WEIGHT = 1.0
     DEFAULT_MIN_CONFIDENCE = 0.5
 
-    def __init__(self):
+    def __init__(self, use_llm=True, use_ml=True):
         super().__init__()
         self.max_weight = self.DEFAULT_MAX_WEIGHT
         self.min_confidence = self.DEFAULT_MIN_CONFIDENCE
+        self.use_llm = use_llm
+        self.use_ml = use_ml
         self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-    def validate_constraints(self, plan, constraints):
-        violations = []
+        # Example fallback ML model for anomaly detection (dummy setup)
+        self.ml_model = RandomForestClassifier()
+        self._is_model_trained = False  # Will flip to True once trained
 
-        # 1. Check each asset weight is valid
+    def validate_constraints(self, plan: Dict[str, Dict[str, Any]], constraints: Dict[str, Any]):
+        violations = []
         total_weight = 0.0
+
         for symbol, info in plan.items():
-            weight = info.get('weight', 0)
+            weight = info.get('weight', 0.0)
             reason = info.get('reason', '').strip()
 
             if not (0.0 <= weight <= 1.0):
-                violations.append(f"{symbol}: weight {weight:.2f} is out of bounds [0, 1].")
-
+                violations.append(f"{symbol}: weight {weight:.2f} out of bounds [0, 1]")
             if symbol.lower() == 'cash' and weight > 0.5:
-                violations.append(f"{symbol}: weight {weight:.2f} exceeds max 0.5")
-
+                violations.append(f"{symbol}: weight {weight:.2f} exceeds cash limit of 0.5")
             if reason == "":
-                violations.append(f"{symbol}: missing reason for allocation.")
+                violations.append(f"{symbol}: missing allocation reason")
 
             total_weight += weight
 
-        # 2. Check total exposure
         if total_weight > self.max_weight:
-            violations.append(f"Total portfolio weight {total_weight:.2f} exceeds limit of {self.max_weight:.2f}")
+            violations.append(f"Total weight {total_weight:.2f} exceeds max allowed {self.max_weight:.2f}")
 
-        # 3. Try using LLM for extra suggestions
-        llm_suggestion = ""
-        if violations:
+        # Optional: simple ML-based anomaly detection
+        if self.use_ml and self._is_model_trained:
+            X = np.array([[info.get('weight', 0.0)] for info in plan.values()])
+            prediction = self.ml_model.predict(X)
+            if np.any(prediction == -1):
+                violations.append("ML model flagged anomaly in weight distribution")
+
+        # Optional: LLM-based critique for explanation
+        if self.use_llm and violations:
             try:
                 prompt = (
-                    "A portfolio plan has the following issues:\n"
-                    + "\n".join(f"- {v}" for v in violations)
-                    + "\n\nExplain why these are problematic in financial terms and suggest specific adjustments to meet constraints."
+                    "A portfolio plan has the following issues:\n" +
+                    "\n".join(f"- {v}" for v in violations) +
+                    "\n\nExplain the financial risk implications and how to revise the plan to satisfy constraints."
                 )
                 response = self.client.chat.completions.create(
                     model="gpt-4o",
@@ -67,51 +80,32 @@ class ValidatorAgent(BaseAgent):
                         {"role": "system", "content": "You are a financial risk management assistant."},
                         {"role": "user", "content": prompt}
                     ],
-                    temperature=0.2,
+                    temperature=0.3,
                     max_tokens=300
                 )
                 llm_suggestion = response.choices[0].message.content.strip()
+                violations.append("LLM Suggestion: " + llm_suggestion)
             except Exception as e:
-                llm_suggestion = f"LLM Suggestion: Could not get LLM explanation: {e}"
-            violations.append(llm_suggestion)
+                violations.append(f"LLM Suggestion: LLM call failed: {e}")
 
-        is_valid = len(violations) == 0
-        return is_valid, violations
+        return len(violations) == 0, violations
 
-    def _explain_and_tune(self, plan, violations):
-        """
-        Use OpenAI API to explain violations and suggest adjustments.
-        """
-        prompt = (
-            f"You are a quantitative risk manager.\n"
-            f"Given this trading plan: {plan}\n"
-            f"And these violations: {violations}\n"
-            "Explain why they occur and recommend how to adjust weights or parameters to satisfy constraints."
-        )
-        try:
-            resp = client.chat.completions.create(model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": "You are an expert risk management assistant."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.2,
-            max_tokens=200)
-            return resp.choices[0].message.content.strip()
-        except Exception as e:
-            return f"Could not get LLM explanation: {e}"
+    def train_ml_model(self, X_train, y_train):
+        self.ml_model.fit(X_train, y_train)
+        self._is_model_trained = True
 
-    # No-op implementations inherited from BaseAgent for propose_plan, justify_plan, etc.
     def propose_plan(self, market_data, context):
-        raise NotImplementedError("ValidatorAgent only validates plans, does not propose.")
+        raise NotImplementedError("ValidatorAgent does not propose plans.")
 
     def justify_plan(self, plan, context):
-        raise NotImplementedError("ValidatorAgent does not justify proposals.")
+        raise NotImplementedError("ValidatorAgent does not justify plans.")
 
     def critique_plan(self, plan, context):
         raise NotImplementedError("ValidatorAgent does not critique plans.")
 
     def execute(self, plan):
         raise NotImplementedError("ValidatorAgent does not execute plans.")
+
 
     # def validate_constraints(self, plan, constraints):
     #     """
