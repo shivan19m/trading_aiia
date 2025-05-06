@@ -11,7 +11,7 @@ load_dotenv()
 
 if __name__ == '__main__':
     # 1. 定义标的与优化器
-    tickers = ['AAPL','MSFT','GOOG','AMZN','TSLA','cash']
+    tickers = ['AAPL','MSFT','GOOG','AMZN','TSLA']
     optimizer = StrategyOptimizer(tickers)
     
     # 2. 在第一个窗口上进行超参搜索

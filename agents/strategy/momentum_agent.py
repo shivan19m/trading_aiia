@@ -13,6 +13,19 @@ from typing import Dict, Any, Optional
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+def extract_json_from_response(response):
+    # Remove code fences if present
+    response = re.sub(r'```(?:json)?', '', response, flags=re.IGNORECASE).strip()
+    # Find the first {...} block
+    match = re.search(r'\{.*\}', response, re.DOTALL)
+    if match:
+        try:
+            return json.loads(match.group(0))
+        except Exception as e:
+            logger.error(f"JSON parse error: {e}")
+            return None
+    return None
+
 class MomentumAgent(BaseAgent):
     """
     Agent that generates trade plans based on price acceleration and volume trends using GPT-4.
@@ -53,36 +66,24 @@ class MomentumAgent(BaseAgent):
             Features:
             {json.dumps(ticker_features, indent=2)}
             
-            Generate a JSON allocation plan with weights summing to 1.0.
-            Include a 'reason' for each allocation.
-            Example format:
-            {{
-                "AAPL": {{"weight": 0.3, "reason": "Strong momentum indicators"}},
-                "cash": {{"weight": 0.1, "reason": "Holding cash for opportunities"}}
-            }}
+            Return ONLY a valid JSON object mapping each symbol to a dict with keys: weight (0-1), reason (string). Do not include any explanation, markdown, or code block formatting.
             """
 
             # Get GPT response
             response = self.client.chat.completions.create(
-                model="gpt-4o-mini",
+                model="gpt-4",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.7,
                 max_tokens=1000
             )
             gpt_response = response.choices[0].message.content
 
-            # Extract JSON using regex
-            plan_match = re.search(r'\{(?:[^{}]*|\{[^{}]*\})*\}\s*$', gpt_response)
-            if not plan_match:
-                logger.error("Failed to find JSON in GPT response")
+            # Robust JSON extraction
+            plan = extract_json_from_response(gpt_response)
+            if not plan:
+                logger.error("Failed to extract valid JSON plan from LLM response")
                 return {}
 
-            plan_str = plan_match.group(0)
-            logger.debug(f"Extracted plan JSON: {plan_str[:100]}...")
-
-            # Parse JSON
-            plan = json.loads(plan_str)
-            
             # Validate plan structure
             if not self._validate_plan(plan):
                 logger.error("Plan validation failed")
@@ -92,7 +93,7 @@ class MomentumAgent(BaseAgent):
 
         except Exception as e:
             logger.error(f"Error in propose_plan: {str(e)}")
-            return self.mock_plan
+            return {}
         
     def extract_features(self, market_data_dict):
         features = {}

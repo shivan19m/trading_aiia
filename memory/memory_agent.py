@@ -22,10 +22,19 @@ class MemoryAgent:
             api_key=os.getenv('OPENAI_API_KEY'),
             model_name="text-embedding-ada-002"
         )
-        self.collection = self.chroma_client.create_collection(
-            "plan_vectors",
-            embedding_function=self.embedding_fn
-        )
+        try:
+            self.collection = self.chroma_client.create_collection(
+                name="plan_vectors",
+                metadata={"hnsw:space": "cosine"}
+            )
+        except chromadb.errors.InternalError as e:
+            if "already exists" in str(e):
+                # If collection exists, get it instead of creating
+                self.collection = self.chroma_client.get_collection(
+                    name="plan_vectors"
+                )
+            else:
+                raise e
 
     def store_plan(self, plan, status):
         """

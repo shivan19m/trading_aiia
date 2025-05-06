@@ -100,68 +100,69 @@ class MetaPlannerAgent(BaseAgent):
             np.min(weights)
         ]
 
-    def coordinate_planning(self, agent_plans, market_data):
+    def coordinate_planning(self, plans, market_data):
         """
-        Choose the best plan using ML + LLM hybrid scoring
+        Coordinate between different trading plans and select the best one.
         """
-        if not agent_plans:
-            return None
+        scores = []
+        for plan in plans:
+            score = self._evaluate_plan(plan, market_data)
+            scores.append(score)
+        
+        self.logger.info(f"[MetaPlanner] Plan scores: {scores}")
+        
+        # Select plan with highest score
+        best_idx = scores.index(max(scores))
+        return plans[best_idx]
 
-        plan_scores = []
-
-        for plan in agent_plans:
-            score = 0.0
-
-            # Use ML if trained
-            if self.use_ml and self._ml_trained:
-                try:
-                    features = np.array(self._extract_features(plan)).reshape(1, -1)
-                    score += float(self.ml_model.predict_proba(features)[0][1])  # class 1 prob
-                except Exception as e:
-                    logger.warning(f"[ML] Scoring failed: {e}")
-
-            # Use LLM for additional scoring
-            if self.use_llm:
-                try:
-                    prompt = (
-                        "Evaluate the quality of this portfolio allocation plan for a short-term trading strategy.\n"
-                        "Score it from 0 to 10 based on diversification, exposure, and risk/reward balance.\n"
-                        "Plan:\n" + str(plan)
-                    )
-                    response = self.call_openai_with_backoff(
-                        client=self.client,
-                        model="gpt-4o",
-                        messages=[
-                            {"role": "system", "content": "You are a financial risk evaluation assistant."},
-                            {"role": "user", "content": prompt}
-                        ],
-                        temperature=0.2,
-                        max_tokens=100
-                    )
-                    llm_score = self._extract_score_from_text(response.choices[0].message.content)
-                    if llm_score is not None:
-                        score += llm_score / 10.0  # Normalize to [0,1]
-                except Exception as e:
-                    logger.warning(f"[LLM] Scoring failed: {e}")
-
-            plan_scores.append(score)
-
-        # Pick the best scoring plan
-        best_idx = np.argmax(plan_scores)
-        logger.info(f"[MetaPlanner] Plan scores: {plan_scores}")
-        return agent_plans[best_idx]
-
-    def _extract_score_from_text(self, text):
+    def _evaluate_plan(self, plan, market_data):
         """
-        Try to extract a numeric score (0-10) from LLM text output
+        Evaluate a plan based on multiple criteria.
         """
-        import re
-        match = re.search(r"(\d+(\.\d+)?)", text)
-        if match:
-            score = float(match.group(1))
-            if 0 <= score <= 10:
-                return score
-        return None
+        score = 0.0
+        
+        # 1. Diversification score (0-0.3)
+        weights = [details['weight'] for details in plan.values()]
+        if weights:
+            # Penalize extreme concentration
+            max_weight = max(weights)
+            diversification_score = 0.3 * (1 - max_weight)
+            score += diversification_score
+        
+        # 2. Cash allocation score (0-0.2)
+        cash_weight = plan.get('cash', {}).get('weight', 0)
+        cash_score = 0.2 * (0.1 <= cash_weight <= 0.3)  # Reward reasonable cash allocation
+        score += cash_score
+        
+        # 3. Market condition alignment (0-0.3)
+        market_score = 0.0
+        for symbol, details in plan.items():
+            if symbol == 'cash':
+                continue
+            if symbol in market_data:
+                df = market_data[symbol]
+                # Check if plan aligns with recent trend
+                recent_return = (df['close'].iloc[-1] / df['close'].iloc[-5] - 1)
+                weight = details['weight']
+                if (recent_return > 0 and weight > 0.1) or (recent_return < 0 and weight < 0.1):
+                    market_score += 0.1
+        score += min(0.3, market_score)
+        
+        # 4. Risk management score (0-0.2)
+        risk_score = 0.0
+        for symbol, details in plan.items():
+            if symbol == 'cash':
+                continue
+            if symbol in market_data:
+                df = market_data[symbol]
+                # Check volatility
+                volatility = df['close'].pct_change().std()
+                weight = details['weight']
+                if volatility > 0.02 and weight < 0.2:  # High volatility, low weight
+                    risk_score += 0.1
+        score += min(0.2, risk_score)
+        
+        return score
 
     def classify_constraints(self, plan):
         return {

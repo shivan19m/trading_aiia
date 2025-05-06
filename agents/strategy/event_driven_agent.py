@@ -5,6 +5,7 @@ import openai
 import json
 from agents.base import BaseAgent
 import random
+from openai import OpenAI
 
 class EventDrivenAgent(BaseAgent):
     """
@@ -13,6 +14,8 @@ class EventDrivenAgent(BaseAgent):
     def __init__(self):
         # Model used: gpt-4
         super().__init__()
+        self.client = OpenAI()
+        self.name = "EventDrivenAgent"
     # def propose_plan(self, features, context, memory_agent=None):
     #     """
     #     Propose a portfolio allocation plan using event-driven indicators, vector memory retrieval, and GPT-4.
@@ -311,31 +314,53 @@ class EventDrivenAgent(BaseAgent):
         )
 
         try:
-            response = self.call_openai_with_backoff(
-                client=self.client,
-                model="gpt-4o",
+            response = self.client.chat.completions.create(
+                model="gpt-4",
                 messages=[
-                    {"role": "system", "content": "You are a financial trading assistant."},
+                    {"role": "system", "content": "You are a financial trading assistant. Always respond with valid JSON only."},
                     {"role": "user", "content": prompt}
                 ],
                 temperature=0.3,
                 max_tokens=500
             )
             plan_str = response.choices[0].message.content.strip()
-            plan = json.loads(plan_str)
+            
+            # Clean the response to ensure it's valid JSON
+            plan_str = plan_str.replace('```json', '').replace('```', '').strip()
+            
+            try:
+                plan = json.loads(plan_str)
+                # Validate the plan structure
+                if not isinstance(plan, dict):
+                    raise ValueError("Plan must be a dictionary")
+                
+                # Ensure all weights are between 0 and 1
+                for symbol, details in plan.items():
+                    if not isinstance(details, dict):
+                        raise ValueError(f"Invalid details for {symbol}")
+                    if 'weight' not in details or not 0 <= details['weight'] <= 1:
+                        raise ValueError(f"Invalid weight for {symbol}")
+                    if 'reason' not in details:
+                        details['reason'] = "No reason provided"
+                
+                return plan
 
-            validated = self.validate_plan(plan)
-            return validated
+            except json.JSONDecodeError as je:
+                self.logger.warning(f"[EventDrivenAgent] JSON parse error: {je}")
+                self.logger.debug(f"Raw response: {plan_str}")
+                raise
 
         except Exception as e:
             self.logger.warning(f"[EventDrivenAgent] LLM fallback triggered: {e}")
-            fallback_weight = 0.8 / max(1, len(features))
+            # Create a balanced fallback plan
+            n_assets = len(features)
+            weight = 0.8 / max(1, n_assets)  # Distribute 80% across assets
             fallback_plan = {
-                sym: {"weight": fallback_weight, "reason": "Event-driven fallback allocation."}
+                sym: {"weight": weight, "reason": "Event-driven fallback allocation."}
                 for sym in features.keys()
             }
             fallback_plan["cash"] = {"weight": 0.2, "reason": "Hold cash."}
-            return self.validate_plan(fallback_plan)
+            return fallback_plan
 
     def validate_constraints(self, plan, constraints):
         """

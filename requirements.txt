@@ -8,3 +8,5 @@ matplotlib
 seaborn
 streamlit
 plotly 
+optuna
+scikit-learn
