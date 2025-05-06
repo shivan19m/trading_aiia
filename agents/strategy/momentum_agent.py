@@ -39,9 +39,9 @@ class MomentumAgent(BaseAgent):
         """Set the list of tickers to consider."""
         self.tickers = tickers
 
-    def propose_plan(self, features: Dict[str, Any], context: str, memory_agent=None) -> Dict[str, Dict[str, Any]]:
+    def propose_plan(self, features: Dict[str, Any], context: str, memory_agent=None, current_holdings=None, cash=None, portfolio_history=None) -> Dict[str, Dict[str, Any]]:
         """
-        Generate a portfolio allocation plan based on momentum indicators.
+        Generate a portfolio allocation plan based on momentum indicators and current portfolio state.
         """
         if not self.tickers:
             logger.error("No tickers set for MomentumAgent. Cannot generate plan.")
@@ -56,18 +56,32 @@ class MomentumAgent(BaseAgent):
                 else:
                     logger.warning(f"Missing features for {ticker}")
 
-            # Construct prompt
+            # Add portfolio state to prompt
+            holdings_str = json.dumps(current_holdings, indent=2) if current_holdings else '{}'
+            cash_str = f"{cash}" if cash is not None else 'N/A'
+            history_str = json.dumps(portfolio_history[-3:], indent=2) if portfolio_history else '[]'
+
             prompt = f"""
-            Based on the following technical indicators and market context, generate a portfolio allocation plan.
-            Focus on momentum strategies - identify strong trends and allocate accordingly.
-            
+            Based on the following technical indicators, current portfolio holdings, cash, and recent portfolio history, generate a portfolio allocation plan.
+            Focus on momentum strategies—identify strong trends and allocate accordingly, but avoid unnecessary trades if already optimally allocated. Prefer to hold winners and minimize turnover.
+
             Context: {context}
-            
+
             Features:
             {json.dumps(ticker_features, indent=2)}
-            
+
+            Current Holdings:
+            {holdings_str}
+
+            Cash: {cash_str}
+
+            Recent Portfolio History (last 3 windows):
+            {history_str}
+
             Return ONLY a valid JSON object mapping each symbol to a dict with keys: weight (0-1), reason (string). Do not include any explanation, markdown, or code block formatting.
             """
+
+            print(f"[AGENT] Prompt to LLM:\n{prompt}")
 
             # Get GPT response
             response = self.client.chat.completions.create(

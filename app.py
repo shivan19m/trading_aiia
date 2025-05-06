@@ -10,7 +10,7 @@ from agents.strategy.momentum_agent import MomentumAgent
 from agents.strategy.mean_reversion_agent import MeanReversionAgent
 from agents.strategy.event_driven_agent import EventDrivenAgent
 from agents.meta_planner import MetaPlannerAgent
-from simulation.simulator import simulate
+from simulation.simulate import simulate_portfolio
 from evaluation.metrics import total_return, sharpe_ratio, max_drawdown, hit_rate
 from memory.memory_agent import MemoryAgent
 import os
@@ -96,37 +96,32 @@ initial_capital = st.sidebar.number_input(
     help="Starting capital for simulation"
 )
 
-# Remove n_tickers slider and use fixed AAPL
-tickers = ['AAPL']
-st.sidebar.info("Using AAPL for simulation")
+# Ticker selection (allow multiple)
+tickers = st.sidebar.multiselect(
+    "Select Tickers",
+    ["AAPL", "MSFT", "GOOG", "AMZN", "TSLA", "META", "NVDA", "SPY"],
+    default=["AAPL", "MSFT", "GOOG"]
+)
+if not tickers:
+    st.sidebar.warning("Please select at least one ticker.")
+    st.stop()
 
 # Run simulation button
 if st.sidebar.button("Run Simulation", type="primary"):
     with st.spinner("Running simulation..."):
         try:
-            ticker = 'AAPL'
-            data = load_market_data(ticker)
-            if not data:
-                st.error("Failed to load market data for AAPL.")
-                st.stop()
-
-            # Convert to DataFrame
-            df = pd.DataFrame({
-                'timestamp': data['timestamps'],
-                'open': data['open'],
-                'high': data['high'],
-                'low': data['low'],
-                'close': data['close'],
-                'volume': data['volume'],
-            })
-            df['timestamp'] = pd.to_datetime(df['timestamp'])
-            df.set_index('timestamp', inplace=True)
-
-            # Filter by user-selected date range
-            df = df[(df.index.date >= start_date) & (df.index.date <= end_date)]
-            if df.empty:
-                st.error("No data available for the selected date range.")
-                st.stop()
+            # Load all data for selected tickers
+            all_data = {}
+            for ticker in tickers:
+                cache_file = f"data/cache/{ticker}_{str(start_date)}_{str(end_date)}_1d_vwap.csv"
+                if os.path.exists(cache_file):
+                    df = pd.read_csv(cache_file, index_col=0, parse_dates=True)
+                else:
+                    df = load_market_data(ticker, str(start_date), str(end_date), lookback_days=35, interval='1d')
+                if df is None or df.empty:
+                    st.error(f"Failed to load market data for {ticker}.")
+                    st.stop()
+                all_data[ticker] = df
 
             # Agent selection
             agent_map = {
@@ -134,129 +129,58 @@ if st.sidebar.button("Run Simulation", type="primary"):
                 "Mean Reversion": MeanReversionAgent,
                 "Event Driven": EventDrivenAgent
             }
+            if agent_type == "Ensemble":
+                st.error("Ensemble mode not yet implemented in this demo.")
+                st.stop()
             agent_cls = agent_map[agent_type]
             agent = agent_cls()
-            agent.set_tickers([ticker])
-            context = {}
+            agent.set_tickers(tickers)
 
-            # Simulation loop
-            initial_cash = initial_capital
-            cash = initial_cash
-            holdings = {ticker: 0}
-            portfolio_value_history = []
-            allocation_history = []
-            justifications = []
-            dates = df.index.date.unique()
-            for current_date in dates:
-                # Use all data up to current_date to compute features
-                df_slice = df[df.index.date <= current_date]
-                features = {ticker: compute_features(df_slice)}
-                plan = agent.propose_plan(features, context)
-                # Save allocation for export
-                allocation_history.append({
-                    'date': str(current_date),
-                    'plan': plan
-                })
-                # For now, rebalance fully to the plan weights at close price
-                close_price = df_slice['close'].iloc[-1]
-                alloc_cash = cash + holdings[ticker] * close_price
-                weight = plan.get(ticker, {}).get('weight', 0)
-                shares = int((alloc_cash * weight) // close_price)
-                holdings[ticker] = shares
-                cash = alloc_cash - shares * close_price
-                # Portfolio value
-                value = cash + holdings[ticker] * close_price
-                portfolio_value_history.append({'date': str(current_date), 'value': value})
-                # (Optional) Justification
-                if hasattr(agent, 'justify_plan'):
-                    try:
-                        justification = agent.justify_plan(plan, context)
-                    except Exception:
-                        justification = None
-                    justifications.append({'date': str(current_date), 'justification': justification})
+            # Run simulation
+            sim_results = simulate_portfolio(
+                tickers=tickers,
+                all_data=all_data,
+                agent=agent,
+                start_date=str(start_date),
+                end_date=str(end_date),
+                window=30,
+                step=15,
+                initial_cash=initial_capital
+            )
+            pf_df = sim_results['portfolio_history']
+            metrics = sim_results['metrics']
+            plan_history = sim_results['plan_history']
 
-            # Calculate metrics
-            portfolio_df = pd.DataFrame(portfolio_value_history)
-            tr = (portfolio_df['value'].iloc[-1] - initial_cash) / initial_cash
-            mdd = (portfolio_df['value'].cummax() - portfolio_df['value']).max() / portfolio_df['value'].cummax().max()
-            sr = (portfolio_df['value'].pct_change().mean() / portfolio_df['value'].pct_change().std()) * (252 ** 0.5) if portfolio_df['value'].pct_change().std() != 0 else 0
+            # Show metrics
+            st.subheader("Performance Metrics")
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("Total Return", f"{metrics['total_return']*100:.2f}%")
+            col2.metric("Max Drawdown", f"{metrics['max_drawdown']*100:.2f}%")
+            col3.metric("Sharpe Ratio", f"{metrics['sharpe']:.2f}")
+            col4.metric("Rachev Ratio", f"{metrics['rachev']:.2f}")
 
-            # Get SPY benchmark
-            spy_data = load_market_data('SPY')
-            spy_values = []
-            if spy_data:
-                spy_df = pd.DataFrame({
-                    'date': spy_data['timestamps'],
-                    'close': spy_data['close']
-                })
-                spy_df['date'] = pd.to_datetime(spy_df['date'])
-                spy_df = spy_df[(spy_df['date'].dt.date >= start_date) & (spy_df['date'].dt.date <= end_date)]
-                if not spy_df.empty:
-                    start_price = spy_df['close'].iloc[0]
-                    for _, row in spy_df.iterrows():
-                        value = initial_cash * (row['close'] / start_price)
-                        spy_values.append({'date': row['date'].date(), 'value': value})
-
-            # Display results
-            st.header("Simulation Results")
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Final Portfolio Value", f"${portfolio_df['value'].iloc[-1]:,.2f}")
-            with col2:
-                st.metric("Total Return", f"{tr * 100:.2f}%")
-            with col3:
-                st.metric("Max Drawdown", f"{mdd * 100:.2f}%")
-
-            # Portfolio vs SPY chart
-            st.subheader("Portfolio Performance vs SPY")
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(x=portfolio_df['date'], y=portfolio_df['value'], name='Portfolio', line=dict(color='#00ac69')))
-            if spy_values:
-                spy_df2 = pd.DataFrame(spy_values)
-                fig.add_trace(go.Scatter(x=spy_df2['date'], y=spy_df2['value'], name='SPY', line=dict(color='#ff4b4b')))
-            fig.update_layout(xaxis_title="Date", yaxis_title="Portfolio Value ($)", hovermode='x unified', showlegend=True)
+            # Plot portfolio value
+            st.subheader("Portfolio Value Over Time")
+            pf_df_reset = pf_df.reset_index()
+            fig = px.line(pf_df_reset, x='date', y='value', title="Portfolio Value")
             st.plotly_chart(fig, use_container_width=True)
 
-            # Drawdown chart
-            st.subheader("Drawdown Curve")
-            drawdown = (portfolio_df['value'] - portfolio_df['value'].cummax()) / portfolio_df['value'].cummax()
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(x=portfolio_df['date'], y=drawdown * 100, fill='tozeroy', name='Drawdown', line=dict(color='#ff4b4b')))
-            fig.update_layout(xaxis_title="Date", yaxis_title="Drawdown (%)", hovermode='x unified')
-            st.plotly_chart(fig, use_container_width=True)
+            # Show allocations for last window
+            st.subheader("Final Window Allocation")
+            last_plan = pf_df_reset.iloc[-1]['plan']
+            allocs = {k: v['weight'] for k, v in last_plan.items() if 'weight' in v}
+            alloc_df = pd.DataFrame(list(allocs.items()), columns=["Ticker", "Weight"])
+            fig2 = px.pie(alloc_df, names="Ticker", values="Weight", title="Final Portfolio Allocation")
+            st.plotly_chart(fig2, use_container_width=True)
 
-            # Final allocation pie chart (last day)
-            st.subheader("Final Portfolio Allocation")
-            last_plan = allocation_history[-1]['plan']
-            alloc_df = pd.DataFrame([
-                {'symbol': k, 'weight': v['weight']} for k, v in last_plan.items()
-            ])
-            fig = px.pie(alloc_df, values='weight', names='symbol', title='Portfolio Allocation')
-            st.plotly_chart(fig, use_container_width=True)
-
-            # Export options
-            st.subheader("Export Results")
-            if st.button("Export to CSV"):
-                os.makedirs("outputs", exist_ok=True)
-                portfolio_df.to_csv("outputs/portfolio_history.csv", index=False)
-                pd.DataFrame(allocation_history).to_csv("outputs/allocations.csv", index=False)
-                metrics = {
-                    'final_value': portfolio_df['value'].iloc[-1],
-                    'total_return': tr,
-                    'sharpe': sr,
-                    'max_drawdown': mdd
-                }
-                pd.DataFrame([metrics]).to_csv("outputs/metrics.csv", index=False)
-                st.success("Results exported to CSV files in the 'outputs' directory")
-
-            # (Optional) Show daily justifications/logs
-            if st.checkbox("Show daily agent justifications/logs"):
-                st.write(justifications)
+            # Show plan history table
+            st.subheader("Plan History (Last 5 Windows)")
+            st.dataframe(pd.DataFrame(plan_history[-5:]))
 
         except Exception as e:
-            st.error(f"An error occurred during simulation: {str(e)}")
-            st.error("Please check that all dependencies are installed and try again.")
+            st.error(f"Simulation failed: {e}")
 
 # Footer
 st.markdown("---")
 st.markdown("Built with Streamlit • Trading Strategy Simulator") 
+

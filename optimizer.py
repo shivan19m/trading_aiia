@@ -27,9 +27,9 @@ class StrategyOptimizer:
         pipeline.mean_reversion_agent.confidence_threshold = meanrev_threshold
         pipeline.event_driven_agent.max_event_weight = event_weight_cap
 
-        # 3. Run one batch on a fixed validation window
-        val_start = "2024-06-01"
-        val_end   = "2024-06-30"
+        # 3. Run one batch on a fixed validation window (now full year)
+        val_start = "2024-01-01"
+        val_end   = "2024-12-31"
         selected, result = pipeline.run_batch(val_start, val_end)
 
         # 4. Extract a scalar performance metric (e.g. Sharpe or raw return)

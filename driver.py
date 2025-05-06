@@ -12,6 +12,14 @@ load_dotenv()
 if __name__ == '__main__':
     # 1. 定义标的与优化器
     tickers = ['AAPL','MSFT','GOOG','AMZN','TSLA']
+
+    # DEBUG: Load full year of data for all tickers BEFORE optimizer
+    print("\n=== Loading FULL YEAR of data for all tickers ===")
+    full_year_start = "2024-01-01"
+    full_year_end   = "2024-12-31"
+    pipeline = TradingPipeline(tickers)
+    pipeline.run_batch(full_year_start, full_year_end)
+
     optimizer = StrategyOptimizer(tickers)
     
     # 2. 在第一个窗口上进行超参搜索

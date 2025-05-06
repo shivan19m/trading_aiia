@@ -18,10 +18,13 @@ class TradingPipeline:
     Encapsulates the full backtest pipeline: feature extraction, plan proposal,
     critique, validation, meta-planning, execution simulation, and analysis.
     """
-    def __init__(self, tickers, lookback_days=30, interval='1d'):
+    def __init__(self, tickers, lookback_days=35, interval='1d'):
         self.tickers = tickers
         self.lookback_days = lookback_days
         self.interval = interval
+
+        # Remove full-year preloading
+        # self.all_data = ...
 
         # Instantiate agents and assign tickers
         self.momentum_agent       = MomentumAgent();       self.momentum_agent.set_tickers(tickers)
@@ -35,7 +38,7 @@ class TradingPipeline:
 
     def load_data(self, start_date, end_date):
         """
-        Loads OHLCV data for each ticker in the time window.
+        Loads OHLCV data for each ticker in the time window (with lookback).
         """
         data = {}
         for ticker in self.tickers:
@@ -44,8 +47,10 @@ class TradingPipeline:
             df = load_market_data(
                 ticker, start_date, end_date,
                 lookback_days=self.lookback_days,
-                interval=self.interval
+                interval=self.interval,
+                force_refresh=False
             )
+            print(f"{ticker}: Loaded data from {df.index.min()} to {df.index.max()}, shape={df.shape}")
             data[ticker] = df
         return data
 
@@ -176,14 +181,12 @@ class TradingPipeline:
                 'dividend': 0.0,
                 'split': 0.0
             }
-        
-        # Load market data for the ticker
+        # Load market data for the ticker for the window (with lookback)
         df = load_market_data(
             ticker, window_start, window_end,
             lookback_days=self.lookback_days,
-            interval=self.interval
+            interval=self.interval,
+            force_refresh=False
         )
-        
-        # Compute features using the DataFrame
         features = compute_features(df, symbol=ticker)
         return features
