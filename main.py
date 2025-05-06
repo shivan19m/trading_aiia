@@ -270,12 +270,20 @@ if not valid_plans:
     print("No valid plans to select.")
     selected = None
 else:
-    selected = meta_planner.coordinate_planning(
-        [p['plan'] for p in valid_plans],
-        market_data_dict  # Optionally pass full data
-    )
-    print(f"Selected Plan: {selected}")
+    # Extract raw plans from the valid plan objects
+    candidate_plans = [p['plan'] for p in valid_plans]
+    agent_names = [p['agent'] for p in valid_plans]
 
+    # Let MetaPlanner evaluate and select the best plan
+    selected = meta_planner.coordinate_planning(candidate_plans, market_data_dict)
+
+    # Print scores if available (optional - MetaPlanner may log internally)
+    print(f"\nEvaluating {len(candidate_plans)} valid plans:")
+    for name, plan in zip(agent_names, candidate_plans):
+        print(f"- Candidate from {name}: {plan}")
+
+    print(f"\nSelected Plan: {selected}")
+    
 # --- 6) Execute -----------------------------------------------------------
 
 print("\n--- Execution ---")
