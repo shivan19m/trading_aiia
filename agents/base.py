@@ -27,7 +27,7 @@ class BaseAgent(ABC):
         Generate a trading plan based on market data and context.
         Returns a validated plan dict with weights for each ticker and cash.
         """
-        pass
+        raise NotImplementedError("propose_plan() must be implemented by subclass.")
 
     @abstractmethod
     def justify_plan(self, plan, context):
@@ -35,7 +35,7 @@ class BaseAgent(ABC):
         Provide justification for the proposed plan.
         TODO: Integrate LLM-based justification.
         """
-        pass
+        return None
 
     @abstractmethod
     def critique_plan(self, plan, context):
@@ -43,7 +43,7 @@ class BaseAgent(ABC):
         Critique another agent's plan.
         TODO: Implement Socratic reasoning and critique logic.
         """
-        pass
+        return None
 
     @abstractmethod
     def validate_constraints(self, plan, constraints):
@@ -51,7 +51,7 @@ class BaseAgent(ABC):
         Validate the plan against explicit, implicit, and derived constraints.
         TODO: Implement constraint validation logic.
         """
-        pass
+        return True, []
 
     @abstractmethod
     def execute(self, plan):
@@ -59,4 +59,6 @@ class BaseAgent(ABC):
         Execute the plan (or simulate execution).
         TODO: Integrate with ExecutorAgent and real execution logic.
         """
-        pass 
+        return {'status': 'skipped', 'plan': plan} 
+    
+    

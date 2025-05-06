@@ -11,9 +11,8 @@ class EventDrivenAgent(BaseAgent):
     Agent that generates trade plans based on earnings, news sentiment, and macroeconomic events using GPT-4.
     """
     def __init__(self):
-        openai.api_key = os.getenv('OPENAI_API_KEY')
         # Model used: gpt-4
-
+        super().__init__()
     # def propose_plan(self, features, context, memory_agent=None):
     #     """
     #     Propose a portfolio allocation plan using event-driven indicators, vector memory retrieval, and GPT-4.
@@ -73,7 +72,7 @@ class EventDrivenAgent(BaseAgent):
     #     if memory_agent:
     #         memory_agent.store_plan_vector(plan, context_str)
     #     return plan
-    
+
     def propose_plan(self, features, context, memory_agent=None):
         """
         Propose a portfolio allocation plan using event-driven indicators, vector memory retrieval, and GPT API.
@@ -82,7 +81,6 @@ class EventDrivenAgent(BaseAgent):
         import os
         import json
 
-        openai.api_key = os.getenv('OPENAI_API_KEY')
 
         # ✅ 1. Construct context_str safely
         def format_feature_line(symbol, vals):
@@ -175,14 +173,13 @@ class EventDrivenAgent(BaseAgent):
     #     except Exception as e:
     #         print(f"[OpenAI API Error] {e}")
     #         return f"Plan justified by recent news sentiment and macro event analysis. Action: {plan['action']} {plan['quantity']} shares of {plan['symbol']}."
-    
+
     def justify_plan(self, plan, context):
         """
         Use GPT to justify the event-driven portfolio allocation plan.
         """
         import openai
         import os
-        openai.api_key = os.getenv("OPENAI_API_KEY")
 
         # Format the plan as text for GPT input
         plan_str = "\n".join([
@@ -217,14 +214,13 @@ class EventDrivenAgent(BaseAgent):
                 for symbol, info in plan.items()
             ])
             return "Fallback justification based on event-driven heuristics:\n" + fallback
-    
+
     def critique_plan(self, plan, context):
         """
         TODO: Implement Socratic critique logic using LLM.
         """
         import openai
         import os
-        openai.api_key = os.getenv("OPENAI_API_KEY")
         system_prompt = "You are an event-driven trading assistant. Critique trading plans for their alignment with recent earnings, news sentiment, and macroeconomic events."
         user_prompt = (
             f"Critique the following plan from an event-driven perspective. Does it make sense based on recent earnings, news sentiment, and macroeconomic events?\n"
@@ -232,7 +228,7 @@ class EventDrivenAgent(BaseAgent):
         )
         try:
             response = openai.chat.completions.create(
-                model="gpt-4",
+                model="gpt-4o-mini",
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
