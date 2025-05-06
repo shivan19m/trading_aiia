@@ -10,94 +10,205 @@ class MeanReversionAgent(BaseAgent):
     """
     Agent that generates trade plans based on statistical deviations from equilibrium using GPT-4.
     """
-    def __init__(self):
+    def __init__(self,z_thresh: float = 1.0, cap: float = 0.8):
         # Model used: gpt-4o-mini
         super().__init__()
+        # UPDATED: threshold for meaningful z‑scores
+        self.meanrev_z_thresh = z_thresh  
+        # UPDATED: total allocation cap for rule fallback
+        self.rule_weight_cap = cap 
+
+    # UPDATED: add rule-based fallback
+    def apply_rule_fallback(self, features):
+        """
+        Rule‑based fallback:
+          1) Compute score = max(0, |zscore| - z_thresh)
+          2) Allocate cap proportionally to those scores
+          3) Remainder goes to cash or equal‑weight if no scores > 0
+        """
+        scores = {}
+        for sym, vals in features.items():
+            if sym.lower() == "cash" or not isinstance(vals, dict):
+                continue
+            z = abs(vals.get("zscore", 0.0))
+            scores[sym] = max(0.0, z - self.meanrev_z_thresh)
+
+        total = sum(scores.values())
+        plan = {}
+        if total > 0:
+            # proportional allocation within cap
+            for sym, s in scores.items():
+                plan[sym] = {
+                    "weight": self.rule_weight_cap * (s / total),
+                    "reason": "Rule: proportional to |zscore|-threshold"
+                }
+            # allocate remainder to cash
+            plan["cash"] = {
+                "weight": 1.0 - self.rule_weight_cap,
+                "reason": "Rule: cash buffer"
+            }
+        else:
+            # if no signal, equal‑weight everything (including cash)
+            n = len(self.tickers)
+            w = 1.0 / n if n else 1.0
+            for sym in self.tickers:
+                plan[sym] = {
+                    "weight": w,
+                    "reason": "Fallback: equal‑weight allocation"
+                }
+        return plan
 
     def propose_plan(self, features, context, memory_agent=None):
         """
-        Propose a portfolio allocation plan using mean-reversion indicators, vector memory retrieval, and GPT-4.
-        features: dict of {symbol: feature_dict}
-        context: string (optional extra context)
-        memory_agent: MemoryAgent instance (optional)
-        Returns: dict {symbol: {weight, reason}, ...}
+        Generate a mean-reversion plan, falling back to rules if LLM fails.
         """
-        # 1. Construct context_str from key indicators
-        # context_str = "; ".join([
-        #     f"{symbol} z-score {vals.get('zscore', 'nan'):.2f}, BB {vals.get('bb_ma', 'nan'):.2f}, RSI {vals.get('rsi', 'nan'):.2f}"
-        #     for symbol, vals in features.items()
-        # ])
-        context_str = "; ".join([
-            (
-                f"{symbol} z-score {vals.get('zscore', float('nan')):.2f}, "
-                f"BB {vals.get('bb_ma', float('nan')):.2f}, "
-                f"RSI {vals.get('rsi', float('nan')):.2f}"
-                if isinstance(vals, dict)
-                else f"{symbol} has invalid feature data: {vals}"
-            )
-            for symbol, vals in features.items()
-        ])
-        # 2. Retrieve similar plans
-        similar_plans = []
-        if memory_agent:
-            similar_plans = memory_agent.retrieve_similar_plans(context_str, top_k=3)
-        similar_str = "\n".join([str(plan) for plan in similar_plans])
-        # 3. Prepare prompt
-        features_str = "\n".join([f"{symbol}: {vals}" for symbol, vals in features.items()])
-        prompt = (
-            "You are a mean-reversion-based portfolio manager. Given the following features for multiple tickers, "
-            "and these similar past plans:\n"
-            f"{similar_str}\n"
-            "generate a portfolio allocation plan. Use mean-reversion indicators (z-score, Bollinger Bands, RSI) "
-            "to decide which assets to overweight or underweight. "
-            "Return ONLY a valid JSON object mapping each symbol to a dict with keys: weight (0-1), reason (string). "
-            "Include a 'cash' key if you want to hold cash. Do not include any explanation, markdown, or code block formatting.\n"
-            f"Features:\n{features_str}"
+        # 1. Build context string
+        context_str = "; ".join(
+            f"{sym} z={vals.get('zscore', math.nan):.2f}, bb={vals.get('bb_ma', math.nan):.2f}, rsi={vals.get('rsi', math.nan):.2f}"
+            for sym, vals in features.items() if isinstance(vals, dict)
         )
-        try:
-            response = openai.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "system", "content": "You are a financial trading assistant."},
-                          {"role": "user", "content": prompt}],
-                temperature=0.3,
-                max_tokens=500
-            )
-            plan_str = response.choices[0].message.content.strip()
-            try:
-                plan = json.loads(plan_str)
-            except Exception as je:
-                print(f"[OpenAI JSON Parse Error] {je}")
-                print(f"[OpenAI API Output] {plan_str}")
-                raise je
-        except Exception as e:
-            print(f"[OpenAI API Error] {e}")
-            n = len(features)
-            alloc_weight = 0.8 / n if n > 0 else 0
-            plan = {symbol: {"weight": alloc_weight, "reason": "Mean reversion fallback allocation."} for symbol in features.keys()}
-            plan["cash"] = {"weight": 0.2, "reason": "Hold cash."}
-        # 4. Store plan in vector memory
+
+        # 2. Retrieve similar plans
+        similar_str = ""
         if memory_agent:
-            memory_agent.store_plan_vector(plan, context_str)
-        return plan
-    def extract_features(self, market_data_dict):
-        features = {}
-        for symbol, df in market_data_dict.items():
-            try:
-                df = df.copy()
-                df['sma'] = df['close'].rolling(window=20).mean()
-                df['std'] = df['close'].rolling(window=20).std()
-                df['zscore'] = (df['close'] - df['sma']) / df['std']
-                df['rsi'] = df['close'].rolling(14).apply(self._calc_rsi)
-                latest = df.dropna().iloc[-1]
-                features[symbol] = {
-                    'zscore': float(latest['zscore']),
-                    'rsi': float(latest['rsi']),
-                    'bb_upper': float(latest['sma'] + 2 * latest['std']),
-                    'bb_lower': float(latest['sma'] - 2 * latest['std']),
-                }
-            except Exception as e:
-                features[symbol] = {}
-        return features
+            sims = memory_agent.retrieve_similar_plans(context_str, top_k=3)
+            similar_str = "\n".join(map(str, sims))
+
+        # 3. Prepare prompt
+        feat_str = json.dumps(features, indent=2)
+        prompt = (
+            "You are a mean‑reversion portfolio manager. Use z‑score, Bollinger Bands, RSI:\n"
+            f"{similar_str}\n"
+            "Return **JSON only** mapping each symbol to {weight,reason}, weights sum to 1.0.\n"
+            f"Features:\n{feat_str}"
+        )
+
+        try:
+            # 4. LLM call
+            resp = self.client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {"role": "system", "content": "Output valid JSON only."},
+                    {"role": "user",   "content": prompt}
+                ],
+                temperature=0.3, max_tokens=500
+            )
+            raw = resp.choices[0].message.content.strip()
+            clean = raw.replace("```json", "").replace("```", "").strip()
+            plan = json.loads(clean)
+
+            # validate structure
+            if not isinstance(plan, dict):
+                raise ValueError("Plan not a dict")
+            total = 0.0
+            for sym, info in plan.items():
+                if not isinstance(info, dict):
+                    raise ValueError(f"Bad info for {sym}")
+                w = info.get("weight", -1)
+                if not (0.0 <= w <= 1.0):
+                    raise ValueError(f"Weight {w} for {sym} out of [0,1]")
+                info.setdefault("reason", "No reason provided")
+                total += w
+            if abs(total - 1.0) > 1e-2:
+                raise ValueError(f"Weights sum to {total:.2f}, not 1.0")
+
+            return plan
+
+        except Exception as e:
+            # UPDATED: on any failure, use rule fallback
+            self.logger.warning(f"[MeanReversionAgent] LLM failed, applying rule fallback: {e}")
+            return self.apply_rule_fallback(features)
+
+        finally:
+            # 5. Store to memory if desired
+            if memory_agent and 'plan' in locals():
+                memory_agent.store_plan_vector(plan, context_str)
+                
+    # def propose_plan(self, features, context, memory_agent=None):
+    #     """
+    #     Propose a portfolio allocation plan using mean-reversion indicators, vector memory retrieval, and GPT-4.
+    #     features: dict of {symbol: feature_dict}
+    #     context: string (optional extra context)
+    #     memory_agent: MemoryAgent instance (optional)
+    #     Returns: dict {symbol: {weight, reason}, ...}
+    #     """
+    #     # 1. Construct context_str from key indicators
+    #     # context_str = "; ".join([
+    #     #     f"{symbol} z-score {vals.get('zscore', 'nan'):.2f}, BB {vals.get('bb_ma', 'nan'):.2f}, RSI {vals.get('rsi', 'nan'):.2f}"
+    #     #     for symbol, vals in features.items()
+    #     # ])
+    #     context_str = "; ".join([
+    #         (
+    #             f"{symbol} z-score {vals.get('zscore', float('nan')):.2f}, "
+    #             f"BB {vals.get('bb_ma', float('nan')):.2f}, "
+    #             f"RSI {vals.get('rsi', float('nan')):.2f}"
+    #             if isinstance(vals, dict)
+    #             else f"{symbol} has invalid feature data: {vals}"
+    #         )
+    #         for symbol, vals in features.items()
+    #     ])
+    #     # 2. Retrieve similar plans
+    #     similar_plans = []
+    #     if memory_agent:
+    #         similar_plans = memory_agent.retrieve_similar_plans(context_str, top_k=3)
+    #     similar_str = "\n".join([str(plan) for plan in similar_plans])
+    #     # 3. Prepare prompt
+    #     features_str = "\n".join([f"{symbol}: {vals}" for symbol, vals in features.items()])
+    #     prompt = (
+    #         "You are a mean-reversion-based portfolio manager. Given the following features for multiple tickers, "
+    #         "and these similar past plans:\n"
+    #         f"{similar_str}\n"
+    #         "generate a portfolio allocation plan. Use mean-reversion indicators (z-score, Bollinger Bands, RSI) "
+    #         "to decide which assets to overweight or underweight. "
+    #         "Return ONLY a valid JSON object mapping each symbol to a dict with keys: weight (0-1), reason (string). "
+    #         "Include a 'cash' key if you want to hold cash. Do not include any explanation, markdown, or code block formatting.\n"
+    #         f"Features:\n{features_str}"
+    #     )
+    #     try:
+    #         response = openai.chat.completions.create(
+    #             model="gpt-4o-mini",
+    #             messages=[{"role": "system", "content": "You are a financial trading assistant."},
+    #                       {"role": "user", "content": prompt}],
+    #             temperature=0.3,
+    #             max_tokens=500
+    #         )
+    #         plan_str = response.choices[0].message.content.strip()
+    #         try:
+    #             plan = json.loads(plan_str)
+    #         except Exception as je:
+    #             print(f"[OpenAI JSON Parse Error] {je}")
+    #             print(f"[OpenAI API Output] {plan_str}")
+    #             raise je
+    #     except Exception as e:
+    #         print(f"[OpenAI API Error] {e}")
+    #         n = len(features)
+    #         alloc_weight = 0.8 / n if n > 0 else 0
+    #         plan = {symbol: {"weight": alloc_weight, "reason": "Mean reversion fallback allocation."} for symbol in features.keys()}
+    #         plan["cash"] = {"weight": 0.2, "reason": "Hold cash."}
+    #     # 4. Store plan in vector memory
+    #     if memory_agent:
+    #         memory_agent.store_plan_vector(plan, context_str)
+    #     return plan
+    # def extract_features(self, market_data_dict):
+    #     features = {}
+    #     for symbol, df in market_data_dict.items():
+    #         try:
+    #             df = df.copy()
+    #             df['sma'] = df['close'].rolling(window=20).mean()
+    #             df['std'] = df['close'].rolling(window=20).std()
+    #             df['zscore'] = (df['close'] - df['sma']) / df['std']
+    #             df['rsi'] = df['close'].rolling(14).apply(self._calc_rsi)
+    #             latest = df.dropna().iloc[-1]
+    #             features[symbol] = {
+    #                 'zscore': float(latest['zscore']),
+    #                 'rsi': float(latest['rsi']),
+    #                 'bb_upper': float(latest['sma'] + 2 * latest['std']),
+    #                 'bb_lower': float(latest['sma'] - 2 * latest['std']),
+    #             }
+    #         except Exception as e:
+    #             features[symbol] = {}
+    #     return features
+    
     # def justify_plan(self, plan, context):
     #     """
     #     Use GPT-4 to justify the mean-reversion-based plan.

@@ -30,8 +30,10 @@ class MomentumAgent(BaseAgent):
     """
     Agent that generates trade plans based on price acceleration and volume trends using GPT-4.
     """
-    def __init__(self):
+    def __init__(self, window: int = 5):
         super().__init__()  # Initialize base class
+        self.window = window
+        
         self.client = openai.OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
         self.tickers = []
 
@@ -39,75 +41,198 @@ class MomentumAgent(BaseAgent):
         """Set the list of tickers to consider."""
         self.tickers = tickers
 
-    def propose_plan(self, features: Dict[str, Any], context: str, memory_agent=None, current_holdings=None, cash=None, portfolio_history=None) -> Dict[str, Dict[str, Any]]:
+    def apply_rule_fallback(self, features: Dict[str, Any], current_holdings, cash) -> Dict[str, Dict[str, Any]]:
+        """
+        UPDATED: rule-based fallback that allocates proportionally to 5-day momentum,
+        preserves existing winners, and leaves some cash buffer.
+        """
+        scores = {}
+        for sym, vals in features.items():
+            if sym.lower() == "cash" or not isinstance(vals, dict):
+                continue
+            # simple score = recent pct_change
+            scores[sym] = vals.get("momentum", 0.0)
+
+        # only positive momentum
+        pos = {s: max(0, sc) for s, sc in scores.items()}
+        total = sum(pos.values())
+        plan = {}
+
+        if total > 0:
+            # allocate 80% proportionally to positive momentum
+            for sym, sc in pos.items():
+                plan[sym] = {
+                    "weight": 0.8 * (sc / total),
+                    "reason": "Rule: proportional to 5-day momentum"
+                }
+            # preserve current winners by bumping their weight if already held
+            for sym, held_w in (current_holdings or {}).items():
+                if sym in plan and held_w > plan[sym]["weight"]:
+                    plan[sym]["weight"] = held_w
+            # cash buffer
+            plan["cash"] = {"weight": 0.2, "reason": "Rule: cash buffer"}
+        else:
+            # no signal → equal weight across all tickers
+            n = len(self.tickers)
+            w = 1.0 / n if n else 1.0
+            for sym in self.tickers:
+                plan[sym] = {
+                    "weight": w,
+                    "reason": "Fallback: equal‑weight allocation"
+                }
+
+        return plan
+
+    def propose_plan(
+        self,
+        features: Dict[str, Any],
+        context: str,
+        memory_agent=None,
+        current_holdings: Dict[str, float]=None,
+        cash: float=None,
+        portfolio_history: list=None
+    ) -> Dict[str, Dict[str, Any]]:
         """
         Generate a portfolio allocation plan based on momentum indicators and current portfolio state.
         """
+
         if not self.tickers:
-            logger.error("No tickers set for MomentumAgent. Cannot generate plan.")
-            raise ValueError("No tickers set for MomentumAgent.")
+            logger.error("No tickers set for MomentumAgent.")
+            raise ValueError("Tickers must be set before calling propose_plan.")
+
+        # 1) prepare individual feature dict
+        feat = {t: features.get(t, {}) for t in self.tickers}
+        # 2) stringify portfolio state
+        holdings_str = json.dumps(current_holdings or {}, indent=2)
+        cash_str     = f"{cash:.2f}" if cash is not None else "N/A"
+        history_str  = json.dumps((portfolio_history or [])[-3:], indent=2)
+
+        # 3) build prompt
+        prompt = (
+            "You are a momentum-based portfolio manager.\n"
+            "Focus on 5-day price momentum and avoid unnecessary turnover.\n\n"
+            f"Context: {context}\n\n"
+            f"Features:\n{json.dumps(feat, indent=2)}\n\n"
+            "Current Holdings:\n"
+            f"{holdings_str}\n\n"
+            f"Cash: {cash_str}\n\n"
+            "Recent Portfolio History (last 3 periods):\n"
+            f"{history_str}\n\n"
+            "Return ONLY valid JSON mapping each symbol to {weight, reason}, "
+            "weights must sum to 1.0, no markdown or explanation.\n"
+        )
 
         try:
-            # Prepare features for each ticker
-            ticker_features = {}
-            for ticker in self.tickers:
-                if ticker in features:
-                    ticker_features[ticker] = features[ticker]
-                else:
-                    logger.warning(f"Missing features for {ticker}")
-
-            # Add portfolio state to prompt
-            holdings_str = json.dumps(current_holdings, indent=2) if current_holdings else '{}'
-            cash_str = f"{cash}" if cash is not None else 'N/A'
-            history_str = json.dumps(portfolio_history[-3:], indent=2) if portfolio_history else '[]'
-
-            prompt = f"""
-            Based on the following technical indicators, current portfolio holdings, cash, and recent portfolio history, generate a portfolio allocation plan.
-            Focus on momentum strategies—identify strong trends and allocate accordingly, but avoid unnecessary trades if already optimally allocated. Prefer to hold winners and minimize turnover.
-
-            Context: {context}
-
-            Features:
-            {json.dumps(ticker_features, indent=2)}
-
-            Current Holdings:
-            {holdings_str}
-
-            Cash: {cash_str}
-
-            Recent Portfolio History (last 3 windows):
-            {history_str}
-
-            Return ONLY a valid JSON object mapping each symbol to a dict with keys: weight (0-1), reason (string). Do not include any explanation, markdown, or code block formatting.
-            """
-
-            print(f"[AGENT] Prompt to LLM:\n{prompt}")
-
-            # Get GPT response
-            response = self.client.chat.completions.create(
-                model="gpt-4",
-                messages=[{"role": "user", "content": prompt}],
+            # 4) LLM call with backoff
+            resp = self.call_openai_with_backoff(
+                client=self.client,
+                model="gpt-3.5-turbo",         # use an available model
+                messages=[{"role":"system","content":"Output valid JSON only."},
+                          {"role":"user",  "content":prompt}],
                 temperature=0.7,
                 max_tokens=1000
             )
-            gpt_response = response.choices[0].message.content
+            raw = resp.choices[0].message.content.strip()
 
-            # Robust JSON extraction
-            plan = extract_json_from_response(gpt_response)
-            if not plan:
-                logger.error("Failed to extract valid JSON plan from LLM response")
-                return {}
+            # 5) strip code fences if any
+            clean = raw.replace("```json","").replace("```","").strip()
 
-            # Validate plan structure
-            if not self._validate_plan(plan):
-                logger.error("Plan validation failed")
-                return {}
+            # 6) parse JSON
+            plan = json.loads(clean)
+
+            # 7) validate and normalize
+            total = 0.0
+            for sym, info in plan.items():
+                if not isinstance(info, dict):
+                    raise ValueError(f"Bad info for {sym}")
+                w = info.get("weight", 0.0)
+                if not (0.0 <= w <= 1.0):
+                    raise ValueError(f"Weight {w} for {sym} out of bounds")
+                info.setdefault("reason", "No reason provided")
+                total += w
+            if abs(total - 1.0) > 1e-2:
+                raise ValueError(f"Weights sum to {total:.2f}, not 1.0")
 
             return plan
 
         except Exception as e:
-            logger.error(f"Error in propose_plan: {str(e)}")
-            return {}
+            # UPDATED: any failure → rule fallback
+            logger.warning(f"[MomentumAgent] LLM failed, using rule fallback: {e}")
+            return self.apply_rule_fallback(feat, current_holdings, cash)
+
+        finally:
+            # UPDATED: store plan in memory if succeeded
+            if memory_agent and 'plan' in locals():
+                memory_agent.store_plan_vector(plan, json.dumps(feat))
+    # def propose_plan(self, features: Dict[str, Any], context: str, memory_agent=None, current_holdings=None, cash=None, portfolio_history=None) -> Dict[str, Dict[str, Any]]:
+    #     """
+    #     Generate a portfolio allocation plan based on momentum indicators and current portfolio state.
+    #     """
+    #     if not self.tickers:
+    #         logger.error("No tickers set for MomentumAgent. Cannot generate plan.")
+    #         raise ValueError("No tickers set for MomentumAgent.")
+
+    #     try:
+    #         # Prepare features for each ticker
+    #         ticker_features = {}
+    #         for ticker in self.tickers:
+    #             if ticker in features:
+    #                 ticker_features[ticker] = features[ticker]
+    #             else:
+    #                 logger.warning(f"Missing features for {ticker}")
+
+    #         # Add portfolio state to prompt
+    #         holdings_str = json.dumps(current_holdings, indent=2) if current_holdings else '{}'
+    #         cash_str = f"{cash}" if cash is not None else 'N/A'
+    #         history_str = json.dumps(portfolio_history[-3:], indent=2) if portfolio_history else '[]'
+
+    #         prompt = f"""
+    #         Based on the following technical indicators, current portfolio holdings, cash, and recent portfolio history, generate a portfolio allocation plan.
+    #         Focus on momentum strategies—identify strong trends and allocate accordingly, but avoid unnecessary trades if already optimally allocated. Prefer to hold winners and minimize turnover.
+
+    #         Context: {context}
+
+    #         Features:
+    #         {json.dumps(ticker_features, indent=2)}
+
+    #         Current Holdings:
+    #         {holdings_str}
+
+    #         Cash: {cash_str}
+
+    #         Recent Portfolio History (last 3 windows):
+    #         {history_str}
+
+    #         Return ONLY a valid JSON object mapping each symbol to a dict with keys: weight (0-1), reason (string). Do not include any explanation, markdown, or code block formatting.
+    #         """
+
+    #         print(f"[AGENT] Prompt to LLM:\n{prompt}")
+
+    #         # Get GPT response
+    #         response = self.client.chat.completions.create(
+    #             model="gpt-4",
+    #             messages=[{"role": "user", "content": prompt}],
+    #             temperature=0.7,
+    #             max_tokens=1000
+    #         )
+    #         gpt_response = response.choices[0].message.content
+
+    #         # Robust JSON extraction
+    #         plan = extract_json_from_response(gpt_response)
+    #         if not plan:
+    #             logger.error("Failed to extract valid JSON plan from LLM response")
+    #             return {}
+
+    #         # Validate plan structure
+    #         if not self._validate_plan(plan):
+    #             logger.error("Plan validation failed")
+    #             return {}
+
+    #         return plan
+
+    #     except Exception as e:
+    #         logger.error(f"Error in propose_plan: {str(e)}")
+    #         return {}
         
     def extract_features(self, market_data_dict):
         features = {}

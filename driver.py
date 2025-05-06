@@ -3,7 +3,8 @@
 import os
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
-from pipeline import TradingPipeline
+# from pipeline import TradingPipeline
+from Robust_pipeline import TradingPipeline
 from optimizer import StrategyOptimizer
 
 # Load environment
