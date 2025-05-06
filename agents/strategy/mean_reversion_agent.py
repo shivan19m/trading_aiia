@@ -11,8 +11,8 @@ class MeanReversionAgent(BaseAgent):
     Agent that generates trade plans based on statistical deviations from equilibrium using GPT-4.
     """
     def __init__(self):
-        openai.api_key = os.getenv('OPENAI_API_KEY')
-        # Model used: gpt-4
+        # Model used: gpt-4o-mini
+        super().__init__()
 
     def propose_plan(self, features, context, memory_agent=None):
         """
@@ -22,7 +22,6 @@ class MeanReversionAgent(BaseAgent):
         memory_agent: MemoryAgent instance (optional)
         Returns: dict {symbol: {weight, reason}, ...}
         """
-        openai.api_key = os.getenv('OPENAI_API_KEY')
         # 1. Construct context_str from key indicators
         # context_str = "; ".join([
         #     f"{symbol} z-score {vals.get('zscore', 'nan'):.2f}, BB {vals.get('bb_ma', 'nan'):.2f}, RSI {vals.get('rsi', 'nan'):.2f}"
@@ -57,7 +56,7 @@ class MeanReversionAgent(BaseAgent):
         )
         try:
             response = openai.chat.completions.create(
-                model="gpt-4",
+                model="gpt-4o-mini",
                 messages=[{"role": "system", "content": "You are a financial trading assistant."},
                           {"role": "user", "content": prompt}],
                 temperature=0.3,
@@ -80,7 +79,25 @@ class MeanReversionAgent(BaseAgent):
         if memory_agent:
             memory_agent.store_plan_vector(plan, context_str)
         return plan
-
+    def extract_features(self, market_data_dict):
+        features = {}
+        for symbol, df in market_data_dict.items():
+            try:
+                df = df.copy()
+                df['sma'] = df['close'].rolling(window=20).mean()
+                df['std'] = df['close'].rolling(window=20).std()
+                df['zscore'] = (df['close'] - df['sma']) / df['std']
+                df['rsi'] = df['close'].rolling(14).apply(self._calc_rsi)
+                latest = df.dropna().iloc[-1]
+                features[symbol] = {
+                    'zscore': float(latest['zscore']),
+                    'rsi': float(latest['rsi']),
+                    'bb_upper': float(latest['sma'] + 2 * latest['std']),
+                    'bb_lower': float(latest['sma'] - 2 * latest['std']),
+                }
+            except Exception as e:
+                features[symbol] = {}
+        return features
     # def justify_plan(self, plan, context):
     #     """
     #     Use GPT-4 to justify the mean-reversion-based plan.
@@ -102,12 +119,11 @@ class MeanReversionAgent(BaseAgent):
     #     except Exception as e:
     #         print(f"[OpenAI API Error] {e}")
     #         return f"Plan justified by deviation from historical mean (z-score/Bollinger Band). Action: {plan['action']} {plan['quantity']} shares of {plan['symbol']}."
-    
+
     def justify_plan(self, plan, context):
         """
         Use GPT-4 to justify the mean-reversion-based multi-asset plan.
         """
-        openai.api_key = os.getenv('OPENAI_API_KEY')
 
         plan_summary = "\n".join([
             f"{symbol}: weight {vals.get('weight', 0):.2f}, reason: {vals.get('reason', 'N/A')}"
@@ -123,7 +139,7 @@ class MeanReversionAgent(BaseAgent):
 
         try:
             response = openai.chat.completions.create(
-                model="gpt-4-turbo",  # Replace with "gpt-3.5-turbo" if you lack GPT-4 access
+                model="gpt-4o-mini",  # Replace with "gpt-3.5-turbo" if you lack GPT-4 access
                 messages=[{"role": "system", "content": "You are a financial trading assistant."},
                         {"role": "user", "content": prompt}],
                 temperature=0.3,
@@ -143,7 +159,6 @@ class MeanReversionAgent(BaseAgent):
         """
         Use GPT-4 to critique the plan based on mean-reversion logic, z-scores, and Bollinger Bands.
         """
-        openai.api_key = os.getenv("OPENAI_API_KEY")
         system_prompt = "You are a mean-reversion-based trading assistant. Critique trading plans for their alignment with mean reversion logic, z-scores, and Bollinger Bands."
         user_prompt = (
             f"Critique the following plan from a mean reversion perspective. Does it make sense based on statistical deviations from the mean, z-scores, and Bollinger Bands?\n"
