@@ -76,13 +76,13 @@ col1, col2 = st.sidebar.columns(2)
 with col1:
     start_date = st.date_input(
         "Start Date",
-        datetime.now() - timedelta(days=365),
+        datetime(2023, 1, 1),  # Default to 2023-01-01
         help="Start date for simulation"
     )
 with col2:
     end_date = st.date_input(
         "End Date",
-        datetime.now(),
+        datetime(2023, 3, 31),  # Default to 2023-03-31
         help="End date for simulation"
     )
 
@@ -148,16 +148,66 @@ if st.sidebar.button("Run Simulation", type="primary"):
                 initial_cash=initial_capital
             )
             pf_df = sim_results['portfolio_history']
-            metrics = sim_results['metrics']
+            metrics = sim_results['metrics'] if 'metrics' in sim_results else sim_results.get('final_metrics', {})
             plan_history = sim_results['plan_history']
+            step_summaries = sim_results.get('step_summaries', [])
 
             # Show metrics
             st.subheader("Performance Metrics")
             col1, col2, col3, col4 = st.columns(4)
-            col1.metric("Total Return", f"{metrics['total_return']*100:.2f}%")
-            col2.metric("Max Drawdown", f"{metrics['max_drawdown']*100:.2f}%")
-            col3.metric("Sharpe Ratio", f"{metrics['sharpe']:.2f}")
-            col4.metric("Rachev Ratio", f"{metrics['rachev']:.2f}")
+            col1.metric("Total Return", f"{metrics.get('total_return', 0)*100:.2f}%")
+            col2.metric("Max Drawdown", f"{metrics.get('max_drawdown', 0)*100:.2f}%")
+            col3.metric("Sharpe Ratio", f"{metrics.get('sharpe', 0):.2f}")
+            col4.metric("Rachev Ratio", f"{metrics.get('rachev', 0):.2f}")
+
+            # Show metrics at each time step
+            if step_summaries:
+                st.subheader("Step-by-Step Portfolio Metrics")
+                metrics_df = pd.DataFrame([
+                    {
+                        'date': s['date'],
+                        'portfolio_value': s['portfolio']['total_value'],
+                        'cash': s['portfolio']['cash'],
+                        'daily_return': s.get('metrics', {}).get('daily_return', None),
+                        'cumulative_return': s.get('metrics', {}).get('cumulative_return', None),
+                        **{f"pos_{k}": v for k, v in s['portfolio']['position_values'].items()},
+                        **{f"alloc_{k}": v for k, v in s['portfolio']['allocation'].items()},
+                        'selected_agent': s.get('selected_agent', None)  # For ensemble
+                    }
+                    for s in step_summaries
+                ])
+                st.dataframe(metrics_df)
+
+                # Interactive step slider
+                step_idx = st.slider("Select Time Step", 0, len(step_summaries)-1, len(step_summaries)-1)
+                step = step_summaries[step_idx]
+                st.write(f"**Step {step_idx+1} / {len(step_summaries)} — Date: {step['date']}**")
+                st.json(step)
+
+                # Allocation pie chart for selected step
+                allocs = step['portfolio']['allocation']
+                alloc_df = pd.DataFrame([
+                    {"Ticker": k, "Allocation": v}
+                    for k, v in allocs.items() if isinstance(v, (int, float)) and v > 0
+                ])
+                if not alloc_df.empty:
+                    st.plotly_chart(px.pie(alloc_df, names="Ticker", values="Allocation", title=f"Allocation at {step['date']}"))
+                else:
+                    st.write("No allocation data for this step.")
+
+                # Trades at this step
+                if step['trades']:
+                    st.write("**Trades Executed:**")
+                    st.dataframe(pd.DataFrame([
+                        {"Ticker": k, **v} for k, v in step['trades'].items()
+                    ]))
+                else:
+                    st.write("No trades executed at this step.")
+
+                # Plot cumulative return
+                if 'cumulative_return' in metrics_df.columns:
+                    fig3 = px.line(metrics_df, x='date', y='cumulative_return', title="Cumulative Return Over Time")
+                    st.plotly_chart(fig3, use_container_width=True)
 
             # Plot portfolio value
             st.subheader("Portfolio Value Over Time")
@@ -168,10 +218,13 @@ if st.sidebar.button("Run Simulation", type="primary"):
             # Show allocations for last window
             st.subheader("Final Window Allocation")
             last_plan = pf_df_reset.iloc[-1]['plan']
-            allocs = {k: v['weight'] for k, v in last_plan.items() if 'weight' in v}
+            allocs = {k: v['weight'] for k, v in last_plan.items() if isinstance(v, dict) and 'weight' in v and isinstance(v['weight'], (int, float)) and v['weight'] > 0}
             alloc_df = pd.DataFrame(list(allocs.items()), columns=["Ticker", "Weight"])
-            fig2 = px.pie(alloc_df, names="Ticker", values="Weight", title="Final Portfolio Allocation")
-            st.plotly_chart(fig2, use_container_width=True)
+            if not alloc_df.empty:
+                fig2 = px.pie(alloc_df, names="Ticker", values="Weight", title="Final Portfolio Allocation")
+                st.plotly_chart(fig2, use_container_width=True)
+            else:
+                st.write("No allocation data for the final window.")
 
             # Show plan history table
             st.subheader("Plan History (Last 5 Windows)")

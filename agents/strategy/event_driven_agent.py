@@ -16,65 +16,86 @@ class EventDrivenAgent(BaseAgent):
         super().__init__()
         self.client = OpenAI()
         self.name = "EventDrivenAgent"
-    # def propose_plan(self, features, context, memory_agent=None):
-    #     """
-    #     Propose a portfolio allocation plan using event-driven indicators, vector memory retrieval, and GPT-4.
-    #     features: dict of {symbol: feature_dict}
-    #     context: string (optional extra context)
-    #     memory_agent: MemoryAgent instance (optional)
-    #     Returns: dict {symbol: {weight, reason}, ...}
-    #     """
-    #     import openai
-    #     import os
-    #     import json
-    #     openai.api_key = os.getenv('OPENAI_API_KEY')
-    #     # 1. Construct context_str from key indicators
-    #     context_str = "; ".join([
-    #         f"{symbol} RSI {vals.get('rsi', 'nan'):.2f}, MACD {vals.get('macd', 'nan'):.2f}, VolRatio {vals.get('avg_vol_ratio', 'nan'):.2f}"
-    #         for symbol, vals in features.items()
-    #     ])
-    #     # 2. Retrieve similar plans
-    #     similar_plans = []
-    #     if memory_agent:
-    #         similar_plans = memory_agent.retrieve_similar_plans(context_str, top_k=3)
-    #     similar_str = "\n".join([str(plan) for plan in similar_plans])
-    #     # 3. Prepare prompt
-    #     features_str = "\n".join([f"{symbol}: {vals}" for symbol, vals in features.items()])
-    #     prompt = (
-    #         "You are an event-driven portfolio manager. Given the following features for multiple tickers, "
-    #         "and these similar past plans:\n"
-    #         f"{similar_str}\n"
-    #         "generate a portfolio allocation plan. Use event-driven indicators (news sentiment, earnings, macro events, volume spikes) "
-    #         "to decide which assets to overweight or underweight. "
-    #         "Return ONLY a valid JSON object mapping each symbol to a dict with keys: weight (0-1), reason (string). "
-    #         "Include a 'cash' key if you want to hold cash. Do not include any explanation, markdown, or code block formatting.\n"
-    #         f"Features:\n{features_str}"
-    #     )
-    #     try:
-    #         response = openai.chat.completions.create(
-    #             model="gpt-4",
-    #             messages=[{"role": "system", "content": "You are a financial trading assistant."},
-    #                       {"role": "user", "content": prompt}],
-    #             temperature=0.3,
-    #             max_tokens=500
-    #         )
-    #         plan_str = response.choices[0].message.content.strip()
-    #         try:
-    #             plan = json.loads(plan_str)
-    #         except Exception as je:
-    #             print(f"[OpenAI JSON Parse Error] {je}")
-    #             print(f"[OpenAI API Output] {plan_str}")
-    #             raise je
-    #     except Exception as e:
-    #         print(f"[OpenAI API Error] {e}")
-    #         n = len(features)
-    #         alloc_weight = 0.8 / n if n > 0 else 0
-    #         plan = {symbol: {"weight": alloc_weight, "reason": "Event-driven fallback allocation."} for symbol in features.keys()}
-    #         plan["cash"] = {"weight": 0.2, "reason": "Hold cash."}
-    #     # 4. Store plan in vector memory
-    #     if memory_agent:
-    #         memory_agent.store_plan_vector(plan, context_str)
-    #     return plan
+    def propose_plan(self, features, context, memory_agent=None, current_holdings=None, cash=None, portfolio_history=None):
+        """
+        Propose a portfolio allocation plan using event-driven indicators, vector memory retrieval, and GPT-4.
+        features: dict of {symbol: feature_dict}
+        context: string (optional extra context)
+        memory_agent: MemoryAgent instance (optional)
+        current_holdings: dict (optional)
+        cash: float (optional)
+        portfolio_history: list (optional)
+        Returns: dict {symbol: {weight, reason}, ...}
+        """
+        import openai
+        import os
+        import json
+        openai.api_key = os.getenv('OPENAI_API_KEY')
+        # 1. Construct context_str from key indicators
+        context_str = "; ".join([
+            f"{symbol} RSI {vals.get('rsi', 'nan'):.2f}, MACD {vals.get('macd', 'nan'):.2f}, VolRatio {vals.get('avg_vol_ratio', 'nan'):.2f}"
+            for symbol, vals in features.items()
+        ])
+        # Add portfolio state to prompt
+        holdings_str = json.dumps(current_holdings, indent=2) if current_holdings else '{}'
+        cash_str = f"{cash}" if cash is not None else 'N/A'
+        serializable_history = []
+        if portfolio_history:
+            for entry in portfolio_history[-3:]:
+                serializable_entry = {
+                    'date': str(entry['date']),
+                    'value': float(entry['value']),
+                    'cash': float(entry['cash']),
+                    'holdings': {k: int(v) for k, v in entry['holdings'].items()},
+                    'plan': entry['plan']
+                }
+                serializable_history.append(serializable_entry)
+        history_str = json.dumps(serializable_history, indent=2)
+        # 2. Retrieve similar plans
+        similar_plans = []
+        if memory_agent:
+            similar_plans = memory_agent.retrieve_similar_plans(context_str, top_k=3)
+        similar_str = "\n".join([str(plan) for plan in similar_plans])
+        # 3. Prepare prompt
+        features_str = "\n".join([f"{symbol}: {vals}" for symbol, vals in features.items()])
+        prompt = (
+            "You are an event-driven portfolio manager. Given the following features for multiple tickers, "
+            "and these similar past plans:\n"
+            f"{similar_str}\n"
+            "generate a portfolio allocation plan. Use event-driven indicators (news sentiment, earnings, macro events, volume spikes) "
+            "to decide which assets to overweight or underweight. "
+            "Return ONLY a valid JSON object mapping each symbol to a dict with keys: weight (0-1), reason (string). "
+            "Include a 'cash' key if you want to hold cash. Do not include any explanation, markdown, or code block formatting.\n"
+            f"Features:\n{features_str}\n"
+            f"Current Holdings:\n{holdings_str}\n"
+            f"Current Cash:\n{cash_str}\n"
+            f"Portfolio History:\n{history_str}"
+        )
+        try:
+            response = openai.chat.completions.create(
+                model="gpt-4",
+                messages=[{"role": "system", "content": "You are a financial trading assistant."},
+                          {"role": "user", "content": prompt}],
+                temperature=0.3,
+                max_tokens=500
+            )
+            plan_str = response.choices[0].message.content.strip()
+            try:
+                plan = json.loads(plan_str)
+            except Exception as je:
+                print(f"[OpenAI JSON Parse Error] {je}")
+                print(f"[OpenAI API Output] {plan_str}")
+                raise je
+        except Exception as e:
+            print(f"[OpenAI API Error] {e}")
+            n = len(features)
+            alloc_weight = 0.8 / n if n > 0 else 0
+            plan = {symbol: {"weight": alloc_weight, "reason": "Event-driven fallback allocation."} for symbol in features.keys()}
+            plan["cash"] = {"weight": 0.2, "reason": "Hold cash."}
+        # 4. Store plan in vector memory
+        if memory_agent:
+            memory_agent.store_plan_vector(plan, context_str)
+        return plan
     
     def extract_features(self, market_data_dict):
         """
@@ -281,86 +302,6 @@ class EventDrivenAgent(BaseAgent):
             return critique
         except Exception as e:
             return "EventDrivenAgent critique: Could not generate critique due to API error. Check if the plan considers recent earnings, news sentiment, and macro events."
-
-    def propose_plan(self, features, context, memory_agent=None):
-        """
-        Propose a portfolio allocation plan using event-driven indicators, memory, and GPT.
-        """
-        context_str = "; ".join([
-            f"{symbol} | News Sentiment: {vals.get('news_sentiment', 0):.2f}, "
-            f"Earnings Surprise: {vals.get('earnings_surprise', 0):.2f}, "
-            f"Macro Score: {vals.get('macro_score', 0):.2f}"
-            for symbol, vals in features.items() if isinstance(vals, dict)
-        ])
-
-        similar_plans = []
-        if memory_agent:
-            similar_plans = memory_agent.retrieve_similar_plans(context_str, top_k=3)
-        similar_str = "\n".join([str(p) for p in similar_plans])
-
-        features_str = json.dumps(features, indent=2)
-
-        prompt = (
-            "You are an event-driven portfolio manager. Based on the following asset-level indicators:\n"
-            "- News Sentiment (-1 to +1)\n"
-            "- Earnings Surprise (percentage beat/miss)\n"
-            "- Macro Score (impact of macro events)\n\n"
-            "Here are similar past plans for reference:\n"
-            f"{similar_str}\n\n"
-            "Now generate a JSON-only portfolio plan using the format:\n"
-            "{ 'AAPL': { 'weight': 0.3, 'reason': 'Positive earnings and sentiment' }, ... }\n"
-            "Include a 'cash' position if appropriate. Ensure total weights sum to 1.0. No markdown or explanation.\n"
-            f"Input Features:\n{features_str}"
-        )
-
-        try:
-            response = self.client.chat.completions.create(
-                model="gpt-4",
-                messages=[
-                    {"role": "system", "content": "You are a financial trading assistant. Always respond with valid JSON only."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.3,
-                max_tokens=500
-            )
-            plan_str = response.choices[0].message.content.strip()
-            
-            # Clean the response to ensure it's valid JSON
-            plan_str = plan_str.replace('```json', '').replace('```', '').strip()
-            
-            try:
-                plan = json.loads(plan_str)
-                # Validate the plan structure
-                if not isinstance(plan, dict):
-                    raise ValueError("Plan must be a dictionary")
-                
-                # Ensure all weights are between 0 and 1
-                for symbol, details in plan.items():
-                    if not isinstance(details, dict):
-                        raise ValueError(f"Invalid details for {symbol}")
-                    if 'weight' not in details or not 0 <= details['weight'] <= 1:
-                        raise ValueError(f"Invalid weight for {symbol}")
-                    if 'reason' not in details:
-                        details['reason'] = "No reason provided"
-                
-                return plan
-
-            except json.JSONDecodeError as je:
-                self.logger.warning(f"[EventDrivenAgent] JSON parse error: {je}")
-                self.logger.debug(f"Raw response: {plan_str}")
-                raise
-
-        except Exception as e:
-            self.logger.warning(f"[EventDrivenAgent] LLM fallback triggered: {e}")
-            # Create a balanced fallback plan
-            n_assets = len(features)
-            weight = 0.8 / max(1, n_assets)  # Distribute 80% across assets
-            fallback_plan = {
-                sym: {"weight": weight, "reason": "Event-driven fallback allocation."}
-                for sym in features.keys()
-            }
-            fallback_plan["cash"] = {"weight": 0.2, "reason": "Hold cash."}
-            return fallback_plan
 
     def validate_constraints(self, plan, constraints):
         """

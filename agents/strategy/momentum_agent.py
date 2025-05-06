@@ -59,7 +59,20 @@ class MomentumAgent(BaseAgent):
             # Add portfolio state to prompt
             holdings_str = json.dumps(current_holdings, indent=2) if current_holdings else '{}'
             cash_str = f"{cash}" if cash is not None else 'N/A'
-            history_str = json.dumps(portfolio_history[-3:], indent=2) if portfolio_history else '[]'
+            
+            # Convert portfolio history to JSON-serializable format
+            serializable_history = []
+            if portfolio_history:
+                for entry in portfolio_history[-3:]:  # Last 3 windows
+                    serializable_entry = {
+                        'date': str(entry['date']),  # Convert Timestamp to string
+                        'value': float(entry['value']),
+                        'cash': float(entry['cash']),
+                        'holdings': {k: int(v) for k, v in entry['holdings'].items()},
+                        'plan': entry['plan']
+                    }
+                    serializable_history.append(serializable_entry)
+            history_str = json.dumps(serializable_history, indent=2)
 
             prompt = f"""
             Based on the following technical indicators, current portfolio holdings, cash, and recent portfolio history, generate a portfolio allocation plan.

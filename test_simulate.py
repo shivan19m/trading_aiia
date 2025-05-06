@@ -1,5 +1,7 @@
 from data.market_data import load_market_data
 from agents.strategy.momentum_agent import MomentumAgent
+from agents.strategy.mean_reversion_agent import MeanReversionAgent
+from agents.strategy.event_driven_agent import EventDrivenAgent
 from simulation.simulate import simulate_portfolio
 
 # Parameters
@@ -18,8 +20,10 @@ for ticker in tickers:
         exit(1)
     all_data[ticker] = df
 
-# Instantiate agent
-agent = MomentumAgent()
+# Instantiate agent (uncomment the one you want to test)
+# agent = MomentumAgent()
+# agent = MeanReversionAgent()
+agent = EventDrivenAgent()
 agent.set_tickers(tickers)
 
 # Run simulation

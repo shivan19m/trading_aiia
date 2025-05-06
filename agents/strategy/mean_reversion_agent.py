@@ -14,12 +14,15 @@ class MeanReversionAgent(BaseAgent):
         # Model used: gpt-4o-mini
         super().__init__()
 
-    def propose_plan(self, features, context, memory_agent=None):
+    def propose_plan(self, features, context, memory_agent=None, current_holdings=None, cash=None, portfolio_history=None):
         """
         Propose a portfolio allocation plan using mean-reversion indicators, vector memory retrieval, and GPT-4.
         features: dict of {symbol: feature_dict}
         context: string (optional extra context)
         memory_agent: MemoryAgent instance (optional)
+        current_holdings: dict (optional)
+        cash: float (optional)
+        portfolio_history: list (optional)
         Returns: dict {symbol: {weight, reason}, ...}
         """
         # 1. Construct context_str from key indicators
@@ -37,6 +40,21 @@ class MeanReversionAgent(BaseAgent):
             )
             for symbol, vals in features.items()
         ])
+        # Add portfolio state to prompt
+        holdings_str = json.dumps(current_holdings, indent=2) if current_holdings else '{}'
+        cash_str = f"{cash}" if cash is not None else 'N/A'
+        serializable_history = []
+        if portfolio_history:
+            for entry in portfolio_history[-3:]:
+                serializable_entry = {
+                    'date': str(entry['date']),
+                    'value': float(entry['value']),
+                    'cash': float(entry['cash']),
+                    'holdings': {k: int(v) for k, v in entry['holdings'].items()},
+                    'plan': entry['plan']
+                }
+                serializable_history.append(serializable_entry)
+        history_str = json.dumps(serializable_history, indent=2)
         # 2. Retrieve similar plans
         similar_plans = []
         if memory_agent:
@@ -52,7 +70,10 @@ class MeanReversionAgent(BaseAgent):
             "to decide which assets to overweight or underweight. "
             "Return ONLY a valid JSON object mapping each symbol to a dict with keys: weight (0-1), reason (string). "
             "Include a 'cash' key if you want to hold cash. Do not include any explanation, markdown, or code block formatting.\n"
-            f"Features:\n{features_str}"
+            f"Features:\n{features_str}\n"
+            f"Current Holdings:\n{holdings_str}\n"
+            f"Current Cash:\n{cash_str}\n"
+            f"Portfolio History:\n{history_str}"
         )
         try:
             response = openai.chat.completions.create(

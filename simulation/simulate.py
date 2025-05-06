@@ -104,7 +104,7 @@ def simulate_portfolio(
         # Warn if features are missing or fallback is used
         if not features_dict or any(not v for v in features_dict.values()):
             print(f"[WARN] Features missing or empty for window {window_start_str} to {window_end_str}")
-        if any('even distribution' in (v.get('reason','').lower()) for v in plan.values()):
+        if any(isinstance(v, dict) and 'even distribution' in (v.get('reason', '').lower()) for v in plan.values()):
             print(f"[WARN] Agent fallback plan used in window {window_start_str} to {window_end_str}")
 
     # Convert to DataFrame for metrics
