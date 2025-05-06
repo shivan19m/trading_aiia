@@ -122,6 +122,50 @@ This system employs a multi-agent architecture where different agents specialize
 - Real-time trade monitoring
 - Performance tracking
 
+## Simulation Workflow & Features
+
+- **Modern Web UI (Streamlit):**
+  - Configure simulation parameters (strategy, dates, capital, tickers) interactively
+  - Live progress bar and real-time portfolio value updates
+  - Visual breakdown of current investments and allocations at each step
+  - Final results and metrics displayed at the top after simulation
+  - Agent comparison table for all windows, with clear meta-planner selection
+  - Robust error handling and Arrow compatibility for smooth UI experience
+
+- **Ensemble Mode with Meta-Planner:**
+  - All agents (Momentum, Mean Reversion, Event Driven) run in parallel for an initial evaluation period (default: 2 windows)
+  - Meta-planner evaluates agent performance (cumulative return) during the evaluation period
+  - After evaluation, the best-performing agent is selected and used for the remainder of the simulation
+  - Full window-by-window agent comparison and final allocation charts
+
+- **Data Pipeline:**
+  - Uses Polygon.io for historical market data (OHLCV, VWAP, dividends, splits)
+  - Efficient caching and lookback support
+
+- **Extensible & Modular:**
+  - Easily add new agent strategies, meta-planner logic, or evaluation metrics
+  - Modular design for rapid experimentation
+
+## How to Use the Web UI
+
+1. Run the Streamlit app:
+```bash
+streamlit run app.py
+```
+2. Open the provided local URL in your browser
+3. Configure your simulation parameters in the sidebar
+4. Click "Run Simulation" to start
+5. View live progress, agent performance, and final results in the main panel
+
+## New Features (2024)
+- Ensemble mode with meta-planner evaluation period
+- Modern Streamlit UI with live progress, agent comparison, and final results at the top
+- Robust error handling and Arrow compatibility
+- Polygon.io data integration (replaces yfinance)
+- Evaluation period logic for agent selection
+- Improved portfolio value and allocation breakdowns
+- Full window-by-window agent comparison table
+
 ## Installation
 
 1. Clone the repository:

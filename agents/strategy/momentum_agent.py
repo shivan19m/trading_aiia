@@ -77,12 +77,12 @@ class MomentumAgent(BaseAgent):
             prompt = f"""
             Based on the following technical indicators, current portfolio holdings, cash, and recent portfolio history, generate a portfolio allocation plan.
             Focus on momentum strategies—identify strong trends and allocate accordingly, but avoid unnecessary trades if already optimally allocated. Prefer to hold winners and minimize turnover.
-
+            
             Context: {context}
-
+            
             Features:
             {json.dumps(ticker_features, indent=2)}
-
+            
             Current Holdings:
             {holdings_str}
 
@@ -110,7 +110,7 @@ class MomentumAgent(BaseAgent):
             if not plan:
                 logger.error("Failed to extract valid JSON plan from LLM response")
                 return {}
-
+            
             # Validate plan structure
             if not self._validate_plan(plan):
                 logger.error("Plan validation failed")
@@ -139,7 +139,7 @@ class MomentumAgent(BaseAgent):
             except Exception as e:
                 features[symbol] = {}
         return features
-    
+
     def _validate_plan(self, plan: Dict[str, Dict[str, Any]]) -> bool:
         """Validate the structure of the generated plan."""
         try:

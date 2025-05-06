@@ -147,7 +147,7 @@ class MetaPlannerAgent(BaseAgent):
                 if (recent_return > 0 and weight > 0.1) or (recent_return < 0 and weight < 0.1):
                     market_score += 0.1
         score += min(0.3, market_score)
-        
+
         # 4. Risk management score (0-0.2)
         risk_score = 0.0
         for symbol, details in plan.items():
@@ -161,7 +161,7 @@ class MetaPlannerAgent(BaseAgent):
                 if volatility > 0.02 and weight < 0.2:  # High volatility, low weight
                     risk_score += 0.1
         score += min(0.2, risk_score)
-        
+
         return score
 
     def classify_constraints(self, plan):

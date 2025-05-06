@@ -90,6 +90,9 @@ class MeanReversionAgent(BaseAgent):
                 print(f"[OpenAI JSON Parse Error] {je}")
                 print(f"[OpenAI API Output] {plan_str}")
                 raise je
+            # Patch: ensure 'cash' is always a dict
+            if 'cash' in plan and isinstance(plan['cash'], float):
+                plan['cash'] = {"weight": plan['cash'], "reason": "Hold cash for mean reversion opportunity."}
         except Exception as e:
             print(f"[OpenAI API Error] {e}")
             n = len(features)

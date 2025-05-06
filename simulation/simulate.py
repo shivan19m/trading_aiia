@@ -131,3 +131,128 @@ def simulate_portfolio(
         results['metrics']['rachev'] = right / left if left != 0 else np.nan
 
     return results 
+
+# --- Real-time generator version ---
+def simulate_portfolio_realtime(
+    tickers: List[str],
+    all_data: Dict[str, pd.DataFrame],
+    agent,
+    start_date: str,
+    end_date: str,
+    window: int = 30,
+    step: int = 15,
+    initial_cash: float = 100_000
+):
+    dates = pd.date_range(start=start_date, end=end_date, freq='D')
+    windows = []
+    i = 0
+    while i + window <= len(dates):
+        windows.append((dates[i], dates[i+window-1]))
+        i += step
+
+    pipeline = TradingPipeline(tickers, lookback_days=35, interval='1d')
+    agent.set_tickers(tickers)
+    cash = initial_cash
+    holdings = {ticker: 0 for ticker in tickers}
+    portfolio_history = []
+    plan_history = []
+    step_summaries = []
+
+    for win_start, win_end in windows:
+        window_start_str = str(win_start.date())
+        window_end_str = str(win_end.date())
+        market_data_dict = pipeline.load_data(window_start_str, window_end_str)
+        features_dict = {}
+        for ticker in tickers:
+            if ticker.lower() == 'cash':
+                continue
+            features = pipeline._get_features_for_ticker(ticker, window_start_str, window_end_str)
+            features_dict[ticker] = features
+        plan = agent.propose_plan(
+            features_dict,
+            context={},
+            current_holdings=holdings.copy(),
+            cash=cash,
+            portfolio_history=portfolio_history.copy()
+        )
+        plan_history.append({'start': win_start, 'end': win_end, 'plan': plan})
+        total_value = cash + sum(
+            holdings[ticker] * market_data_dict[ticker]['close'].iloc[-1]
+            for ticker in tickers if ticker.lower() != 'cash' and not market_data_dict[ticker].empty
+        )
+        new_holdings = {}
+        spent_cash = 0
+        trades = {}
+        for ticker in tickers:
+            if ticker.lower() == 'cash':
+                continue
+            if market_data_dict[ticker].empty:
+                new_holdings[ticker] = 0
+                continue
+            weight = plan.get(ticker, {}).get('weight', 0)
+            alloc_value = total_value * weight
+            price = market_data_dict[ticker]['close'].iloc[-1]
+            max_affordable_shares = int((cash + sum(holdings[t]*price for t in tickers if t!=ticker and t.lower()!='cash')) // price)
+            shares = int(min(alloc_value // price, max_affordable_shares))
+            if shares != holdings[ticker]:
+                trades[ticker] = {
+                    'old_shares': holdings[ticker],
+                    'new_shares': shares,
+                    'price': price,
+                    'value': abs(shares - holdings[ticker]) * price
+                }
+            new_holdings[ticker] = shares
+            spent_cash += shares * price
+        cash = total_value - spent_cash
+        if cash < 0:
+            cash = 0
+        holdings = new_holdings.copy()
+        final_position_values = {}
+        for ticker in tickers:
+            if ticker.lower() == 'cash':
+                final_position_values[ticker] = cash
+                continue
+            if market_data_dict[ticker].empty:
+                final_position_values[ticker] = 0
+                continue
+            price = market_data_dict[ticker]['close'].iloc[-1]
+            final_position_values[ticker] = holdings[ticker] * price
+        value = sum(final_position_values.values())
+        allocation = {k: v/value for k, v in final_position_values.items() if value > 0}
+        step_summary = {
+            'date': str(win_end.date()),
+            'window': {'start': window_start_str, 'end': window_end_str},
+            'portfolio': {
+                'total_value': float(value),
+                'cash': float(cash),
+                'holdings': {k: int(v) for k, v in holdings.items()},
+                'position_values': final_position_values,
+                'allocation': allocation
+            },
+            'trades': trades,
+            'plan': plan,
+            'market_data': {
+                ticker: {
+                    'price': float(df['close'].iloc[-1]),
+                    'volume': float(df['volume'].iloc[-1]),
+                    'vwap': float(df['vwap'].iloc[-1]) if 'vwap' in df.columns else None
+                }
+                for ticker, df in market_data_dict.items()
+            }
+        }
+        if len(portfolio_history) > 0:
+            prev_value = portfolio_history[-1]['value']
+            daily_return = (value - prev_value) / prev_value
+            step_summary['metrics'] = {
+                'daily_return': float(daily_return),
+                'cumulative_return': float(value / initial_cash - 1)
+            }
+        step_summaries.append(step_summary)
+        portfolio_history.append({
+            'date': str(win_end.date()),
+            'value': float(value),
+            'cash': float(cash),
+            'holdings': {k: int(v) for k, v in holdings.items()},
+            'plan': plan
+        })
+        yield step_summary, list(portfolio_history), list(plan_history), list(step_summaries) 
